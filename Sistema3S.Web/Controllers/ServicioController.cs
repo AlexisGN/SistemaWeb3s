@@ -22,29 +22,56 @@ namespace Sistema3S.Web.Controllers
             [FromQuery] int tamanioPagina = 5
         )
         {
-            var resultado = await _servicioService.ListarAsync(
-                buscar,
-                pagina,
-                tamanioPagina
-            );
+            try
+            {
+                var resultado = await _servicioService.ListarAsync(
+                    buscar,
+                    pagina,
+                    tamanioPagina
+                );
 
-            return Ok(resultado);
+                return Ok(resultado);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudieron cargar los servicios."
+                });
+            }
         }
 
         [HttpGet("{idServicio:int}")]
         public async Task<IActionResult> ObtenerPorId(int idServicio)
         {
-            var servicio = await _servicioService.ObtenerPorIdAsync(idServicio);
-
-            if (servicio == null)
+            try
             {
-                return NotFound(new
+                var servicio = await _servicioService.ObtenerPorIdAsync(idServicio);
+
+                if (servicio == null)
                 {
-                    mensaje = "Servicio no encontrado."
+                    return NotFound(new
+                    {
+                        mensaje = "Servicio no encontrado."
+                    });
+                }
+
+                return Ok(servicio);
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo obtener el servicio."
                 });
             }
-
-            return Ok(servicio);
         }
 
         [HttpPost]
@@ -65,6 +92,13 @@ namespace Sistema3S.Web.Controllers
                 return BadRequest(new
                 {
                     mensaje = ex.Message
+                });
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo registrar el servicio."
                 });
             }
         }
@@ -99,35 +133,63 @@ namespace Sistema3S.Web.Controllers
                     mensaje = ex.Message
                 });
             }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo actualizar el servicio."
+                });
+            }
         }
 
         [HttpDelete("{idServicio:int}")]
         public async Task<IActionResult> Eliminar(int idServicio)
         {
-            var eliminado = await _servicioService.EliminarLogicoAsync(idServicio);
-
-            if (!eliminado)
+            try
             {
-                return NotFound(new
+                var eliminado = await _servicioService.EliminarLogicoAsync(idServicio);
+
+                if (!eliminado)
                 {
-                    mensaje = "Servicio no encontrado."
+                    return NotFound(new
+                    {
+                        mensaje = "Servicio no encontrado."
+                    });
+                }
+
+                return Ok(new
+                {
+                    mensaje = "Servicio eliminado correctamente."
                 });
             }
-
-            return Ok(new
+            catch (Exception)
             {
-                mensaje = "Servicio eliminado correctamente."
-            });
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo eliminar el servicio."
+                });
+            }
         }
+
         [HttpGet("total-activos")]
         public async Task<IActionResult> ContarActivos()
         {
-            var total = await _servicioService.ContarActivosAsync();
-
-            return Ok(new
+            try
             {
-                total
-            });
+                var total = await _servicioService.ContarActivosAsync();
+
+                return Ok(new
+                {
+                    total
+                });
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo obtener el total de servicios activos."
+                });
+            }
         }
     }
 }

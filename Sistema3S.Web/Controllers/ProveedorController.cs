@@ -1,30 +1,30 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using Sistema3S.Web.DTOs.Producto;
+using Sistema3S.Web.DTOs.Proveedor;
 using Sistema3S.Web.Services.Interfaces;
 
 namespace Sistema3S.Web.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class ProductoController : ControllerBase
+    public class ProveedorController : ControllerBase
     {
-        private readonly IProductoService _productoService;
+        private readonly IProveedorService _proveedorService;
 
-        public ProductoController(IProductoService productoService)
+        public ProveedorController(IProveedorService proveedorService)
         {
-            _productoService = productoService;
+            _proveedorService = proveedorService;
         }
 
         [HttpGet]
         public async Task<IActionResult> Listar(
             [FromQuery] string? buscar,
             [FromQuery] int pagina = 1,
-            [FromQuery] int tamanioPagina = 10
+            [FromQuery] int tamanioPagina = 5
         )
         {
             try
             {
-                var resultado = await _productoService.ListarAsync(
+                var resultado = await _proveedorService.ListarAsync(
                     buscar,
                     pagina,
                     tamanioPagina
@@ -36,48 +36,48 @@ namespace Sistema3S.Web.Controllers
             {
                 return StatusCode(500, new
                 {
-                    mensaje = "No se pudieron cargar los productos."
+                    mensaje = "No se pudieron cargar los proveedores."
                 });
             }
         }
 
-        [HttpGet("{idProducto:int}")]
-        public async Task<IActionResult> ObtenerPorId(int idProducto)
+        [HttpGet("{idProveedor:int}")]
+        public async Task<IActionResult> ObtenerPorId(int idProveedor)
         {
             try
             {
-                var producto = await _productoService.ObtenerPorIdAsync(idProducto);
+                var proveedor = await _proveedorService.ObtenerPorIdAsync(idProveedor);
 
-                if (producto == null)
+                if (proveedor == null)
                 {
                     return NotFound(new
                     {
-                        mensaje = "Producto no encontrado."
+                        mensaje = "Proveedor no encontrado."
                     });
                 }
 
-                return Ok(producto);
+                return Ok(proveedor);
             }
             catch (Exception)
             {
                 return StatusCode(500, new
                 {
-                    mensaje = "No se pudo obtener el producto."
+                    mensaje = "No se pudo obtener el proveedor."
                 });
             }
         }
 
         [HttpPost]
-        public async Task<IActionResult> Crear([FromBody] ProductoCrearDto dto)
+        public async Task<IActionResult> Crear([FromBody] ProveedorCrearDto dto)
         {
             try
             {
-                var producto = await _productoService.CrearAsync(dto);
+                var proveedor = await _proveedorService.CrearAsync(dto);
 
                 return CreatedAtAction(
                     nameof(ObtenerPorId),
-                    new { idProducto = producto.IdProducto },
-                    producto
+                    new { idProveedor = proveedor.IdProveedor },
+                    proveedor
                 );
             }
             catch (InvalidOperationException ex)
@@ -91,32 +91,32 @@ namespace Sistema3S.Web.Controllers
             {
                 return StatusCode(500, new
                 {
-                    mensaje = "No se pudo registrar el producto."
+                    mensaje = "No se pudo registrar el proveedor."
                 });
             }
         }
 
-        [HttpPut("{idProducto:int}")]
+        [HttpPut("{idProveedor:int}")]
         public async Task<IActionResult> Actualizar(
-            int idProducto,
-            [FromBody] ProductoActualizarDto dto
+            int idProveedor,
+            [FromBody] ProveedorActualizarDto dto
         )
         {
             try
             {
-                var actualizado = await _productoService.ActualizarAsync(idProducto, dto);
+                var actualizado = await _proveedorService.ActualizarAsync(idProveedor, dto);
 
                 if (!actualizado)
                 {
                     return NotFound(new
                     {
-                        mensaje = "Producto no encontrado."
+                        mensaje = "Proveedor no encontrado."
                     });
                 }
 
                 return Ok(new
                 {
-                    mensaje = "Producto actualizado correctamente."
+                    mensaje = "Proveedor actualizado correctamente."
                 });
             }
             catch (InvalidOperationException ex)
@@ -130,38 +130,51 @@ namespace Sistema3S.Web.Controllers
             {
                 return StatusCode(500, new
                 {
-                    mensaje = "No se pudo actualizar el producto."
+                    mensaje = "No se pudo actualizar el proveedor."
                 });
             }
         }
 
-        [HttpDelete("{idProducto:int}")]
-        public async Task<IActionResult> EliminarLogico(int idProducto)
+        [HttpDelete("{idProveedor:int}")]
+        public async Task<IActionResult> EliminarLogico(int idProveedor)
         {
             try
             {
-                var eliminado = await _productoService.EliminarLogicoAsync(idProducto);
+                var eliminado = await _proveedorService.EliminarLogicoAsync(idProveedor);
 
                 if (!eliminado)
                 {
                     return NotFound(new
                     {
-                        mensaje = "Producto no encontrado."
+                        mensaje = "Proveedor no encontrado."
                     });
                 }
 
                 return Ok(new
                 {
-                    mensaje = "Producto eliminado correctamente."
+                    mensaje = "Proveedor eliminado correctamente."
                 });
             }
             catch (Exception)
             {
                 return StatusCode(500, new
                 {
-                    mensaje = "No se pudo eliminar el producto."
+                    mensaje = "No se pudo eliminar el proveedor."
                 });
             }
+        }
+
+        [HttpGet("consultar-ruc/{ruc}")]
+        public async Task<IActionResult> ConsultarRuc(string ruc)
+        {
+            var resultado = await _proveedorService.ConsultarRucAsync(ruc);
+
+            if (!resultado.Exitoso && !resultado.ProveedorYaExiste)
+            {
+                return BadRequest(resultado);
+            }
+
+            return Ok(resultado);
         }
 
         [HttpGet("total-activos")]
@@ -169,7 +182,7 @@ namespace Sistema3S.Web.Controllers
         {
             try
             {
-                var total = await _productoService.ContarActivosAsync();
+                var total = await _proveedorService.ContarActivosAsync();
 
                 return Ok(new
                 {
@@ -180,7 +193,7 @@ namespace Sistema3S.Web.Controllers
             {
                 return StatusCode(500, new
                 {
-                    mensaje = "No se pudo obtener el total de productos activos."
+                    mensaje = "No se pudo obtener el total de proveedores activos."
                 });
             }
         }

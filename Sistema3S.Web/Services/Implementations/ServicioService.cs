@@ -112,9 +112,11 @@ namespace Sistema3S.Web.Services.Implementations
         {
             ValidarCrear(dto);
 
-            await using var transaction = await _context.Database.BeginTransactionAsync();
-
             var idTipoServicio = await ObtenerIdTipoServicioAsync();
+
+            await ValidarNombreUnicoParaCrearAsync(dto.Nombre, idTipoServicio);
+
+            await using var transaction = await _context.Database.BeginTransactionAsync();
 
             var elemento = new ElementoCatalogo
             {
@@ -166,6 +168,15 @@ namespace Sistema3S.Web.Services.Implementations
                 return false;
             }
 
+            var idTipoServicio = servicio.IdElementoCatalogoNavigation.IdTipoElemento;
+            var idElementoCatalogoActual = servicio.IdElementoCatalogo;
+
+            await ValidarNombreUnicoParaActualizarAsync(
+                dto.Nombre,
+                idTipoServicio,
+                idElementoCatalogoActual
+            );
+
             servicio.IdElementoCatalogoNavigation.Nombre = dto.Nombre.Trim();
             servicio.IdElementoCatalogoNavigation.Descripcion = NormalizarTexto(dto.Descripcion);
             servicio.IdElementoCatalogoNavigation.PrecioReferencial = dto.PrecioReferencial;
@@ -197,6 +208,18 @@ namespace Sistema3S.Web.Services.Implementations
             await _context.SaveChangesAsync();
 
             return true;
+        }
+
+        public async Task<int> ContarActivosAsync()
+        {
+            var idTipoServicio = await ObtenerIdTipoServicioAsync();
+
+            return await _context.Servicio
+                .Include(s => s.IdElementoCatalogoNavigation)
+                .CountAsync(s =>
+                    s.IdElementoCatalogoNavigation.IdTipoElemento == idTipoServicio &&
+                    s.IdElementoCatalogoNavigation.Estado
+                );
         }
 
         private async Task<int> ObtenerIdTipoServicioAsync()
@@ -241,9 +264,29 @@ namespace Sistema3S.Web.Services.Implementations
                 throw new InvalidOperationException("El nombre del servicio es obligatorio.");
             }
 
-            if (dto.PrecioReferencial.HasValue && dto.PrecioReferencial.Value < 0)
+            if (string.IsNullOrWhiteSpace(dto.SectorAplicacion))
+            {
+                throw new InvalidOperationException("El sector de aplicación es obligatorio.");
+            }
+
+            if (!dto.PrecioReferencial.HasValue)
+            {
+                throw new InvalidOperationException("El precio referencial es obligatorio.");
+            }
+
+            if (dto.PrecioReferencial.Value < 0)
             {
                 throw new InvalidOperationException("El precio referencial no puede ser negativo.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.ImagenUrl))
+            {
+                throw new InvalidOperationException("La URL de la imagen es obligatoria.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.Descripcion))
+            {
+                throw new InvalidOperationException("La descripción del servicio es obligatoria.");
             }
         }
 
@@ -254,9 +297,66 @@ namespace Sistema3S.Web.Services.Implementations
                 throw new InvalidOperationException("El nombre del servicio es obligatorio.");
             }
 
-            if (dto.PrecioReferencial.HasValue && dto.PrecioReferencial.Value < 0)
+            if (string.IsNullOrWhiteSpace(dto.SectorAplicacion))
+            {
+                throw new InvalidOperationException("El sector de aplicación es obligatorio.");
+            }
+
+            if (!dto.PrecioReferencial.HasValue)
+            {
+                throw new InvalidOperationException("El precio referencial es obligatorio.");
+            }
+
+            if (dto.PrecioReferencial.Value < 0)
             {
                 throw new InvalidOperationException("El precio referencial no puede ser negativo.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.ImagenUrl))
+            {
+                throw new InvalidOperationException("La URL de la imagen es obligatoria.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.Descripcion))
+            {
+                throw new InvalidOperationException("La descripción del servicio es obligatoria.");
+            }
+        }
+
+        private async Task ValidarNombreUnicoParaCrearAsync(string nombre, int idTipoServicio)
+        {
+            var nombreNormalizado = nombre.Trim().ToLower();
+
+            var existeServicio = await _context.ElementoCatalogo
+                .AnyAsync(e =>
+                    e.IdTipoElemento == idTipoServicio &&
+                    e.Nombre.Trim().ToLower() == nombreNormalizado
+                );
+
+            if (existeServicio)
+            {
+                throw new InvalidOperationException("Ya existe un servicio registrado con ese nombre.");
+            }
+        }
+
+        private async Task ValidarNombreUnicoParaActualizarAsync(
+            string nombre,
+            int idTipoServicio,
+            int idElementoCatalogoActual
+        )
+        {
+            var nombreNormalizado = nombre.Trim().ToLower();
+
+            var existeServicio = await _context.ElementoCatalogo
+                .AnyAsync(e =>
+                    e.IdTipoElemento == idTipoServicio &&
+                    e.IdElementoCatalogo != idElementoCatalogoActual &&
+                    e.Nombre.Trim().ToLower() == nombreNormalizado
+                );
+
+            if (existeServicio)
+            {
+                throw new InvalidOperationException("Ya existe otro servicio registrado con ese nombre.");
             }
         }
 
@@ -278,17 +378,6 @@ namespace Sistema3S.Web.Services.Implementations
             }
 
             return $"Hola, deseo solicitar información sobre el servicio de {nombreServicio.Trim()}.";
-        }
-        public async Task<int> ContarActivosAsync()
-        {
-            var idTipoServicio = await ObtenerIdTipoServicioAsync();
-
-            return await _context.Servicio
-                .Include(s => s.IdElementoCatalogoNavigation)
-                .CountAsync(s =>
-                    s.IdElementoCatalogoNavigation.IdTipoElemento == idTipoServicio &&
-                    s.IdElementoCatalogoNavigation.Estado
-                );
         }
     }
 }

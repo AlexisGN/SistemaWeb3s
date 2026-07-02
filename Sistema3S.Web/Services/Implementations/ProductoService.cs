@@ -157,40 +157,11 @@ namespace Sistema3S.Web.Services.Implementations
 
         public async Task<ProductoListadoDto> CrearAsync(ProductoCrearDto dto)
         {
-            if (string.IsNullOrWhiteSpace(dto.Nombre))
-            {
-                throw new InvalidOperationException("El nombre del producto es obligatorio.");
-            }
+            ValidarCrear(dto);
 
-            if (string.IsNullOrWhiteSpace(dto.CodigoProducto))
-            {
-                throw new InvalidOperationException("El código del producto es obligatorio.");
-            }
+            var codigoLimpio = NormalizarCodigo(dto.CodigoProducto);
 
-            if (dto.StockInicial < 0)
-            {
-                throw new InvalidOperationException("El stock inicial no puede ser negativo.");
-            }
-
-            if (dto.StockMinimo < 0)
-            {
-                throw new InvalidOperationException("El stock mínimo no puede ser negativo.");
-            }
-
-            if (dto.StockInicial <= dto.StockMinimo)
-            {
-                throw new InvalidOperationException("El stock inicial debe ser mayor que el stock mínimo.");
-            }
-
-            var codigoLimpio = dto.CodigoProducto.Trim();
-
-            var existeCodigo = await _context.Producto
-                .AnyAsync(p => p.CodigoProducto == codigoLimpio);
-
-            if (existeCodigo)
-            {
-                throw new InvalidOperationException("Ya existe un producto con ese código.");
-            }
+            await ValidarCodigoUnicoParaCrearAsync(codigoLimpio);
 
             var tipoProducto = await _context.TipoElemento
                 .FirstOrDefaultAsync(t => t.Nombre == "Producto");
@@ -206,13 +177,9 @@ namespace Sistema3S.Web.Services.Implementations
             {
                 IdTipoElemento = tipoProducto.IdTipoElemento,
                 Nombre = dto.Nombre.Trim(),
-                Descripcion = string.IsNullOrWhiteSpace(dto.Descripcion)
-                    ? null
-                    : dto.Descripcion.Trim(),
+                Descripcion = NormalizarTexto(dto.Descripcion),
                 PrecioReferencial = dto.PrecioReferencial,
-                ImagenUrl = string.IsNullOrWhiteSpace(dto.ImagenUrl)
-                    ? null
-                    : dto.ImagenUrl.Trim(),
+                ImagenUrl = NormalizarTexto(dto.ImagenUrl),
                 Estado = true,
                 FechaRegistro = DateTime.Now
             };
@@ -227,9 +194,7 @@ namespace Sistema3S.Web.Services.Implementations
                 IdMarca = dto.IdMarca,
                 IdUnidadMedida = dto.IdUnidadMedida,
                 CodigoProducto = codigoLimpio,
-                FichaTecnicaPdf = string.IsNullOrWhiteSpace(dto.FichaTecnicaPdf)
-                    ? null
-                    : dto.FichaTecnicaPdf.Trim(),
+                FichaTecnicaPdf = NormalizarTexto(dto.FichaTecnicaPdf),
                 AplicaInventario = true
             };
 
@@ -261,22 +226,9 @@ namespace Sistema3S.Web.Services.Implementations
 
         public async Task<bool> ActualizarAsync(int idProducto, ProductoActualizarDto dto)
         {
-            if (string.IsNullOrWhiteSpace(dto.Nombre))
-            {
-                throw new InvalidOperationException("El nombre del producto es obligatorio.");
-            }
+            ValidarActualizar(dto);
 
-            if (string.IsNullOrWhiteSpace(dto.CodigoProducto))
-            {
-                throw new InvalidOperationException("El código del producto es obligatorio.");
-            }
-
-            if (dto.StockMinimo < 0)
-            {
-                throw new InvalidOperationException("El stock mínimo no puede ser negativo.");
-            }
-
-            var codigoLimpio = dto.CodigoProducto.Trim();
+            var codigoLimpio = NormalizarCodigo(dto.CodigoProducto);
 
             var producto = await _context.Producto
                 .Include(p => p.IdElementoCatalogoNavigation)
@@ -288,33 +240,18 @@ namespace Sistema3S.Web.Services.Implementations
                 return false;
             }
 
-            var codigoDuplicado = await _context.Producto
-                .AnyAsync(p =>
-                    p.IdProducto != idProducto &&
-                    p.CodigoProducto == codigoLimpio
-                );
-
-            if (codigoDuplicado)
-            {
-                throw new InvalidOperationException("Ya existe otro producto con ese código.");
-            }
+            await ValidarCodigoUnicoParaActualizarAsync(codigoLimpio, idProducto);
 
             producto.IdCategoria = dto.IdCategoria;
             producto.IdMarca = dto.IdMarca;
             producto.IdUnidadMedida = dto.IdUnidadMedida;
             producto.CodigoProducto = codigoLimpio;
-            producto.FichaTecnicaPdf = string.IsNullOrWhiteSpace(dto.FichaTecnicaPdf)
-                ? null
-                : dto.FichaTecnicaPdf.Trim();
+            producto.FichaTecnicaPdf = NormalizarTexto(dto.FichaTecnicaPdf);
 
             producto.IdElementoCatalogoNavigation.Nombre = dto.Nombre.Trim();
-            producto.IdElementoCatalogoNavigation.Descripcion = string.IsNullOrWhiteSpace(dto.Descripcion)
-                ? null
-                : dto.Descripcion.Trim();
+            producto.IdElementoCatalogoNavigation.Descripcion = NormalizarTexto(dto.Descripcion);
             producto.IdElementoCatalogoNavigation.PrecioReferencial = dto.PrecioReferencial;
-            producto.IdElementoCatalogoNavigation.ImagenUrl = string.IsNullOrWhiteSpace(dto.ImagenUrl)
-                ? null
-                : dto.ImagenUrl.Trim();
+            producto.IdElementoCatalogoNavigation.ImagenUrl = NormalizarTexto(dto.ImagenUrl);
             producto.IdElementoCatalogoNavigation.Estado = dto.Estado;
 
             if (producto.Inventario != null)
@@ -350,11 +287,160 @@ namespace Sistema3S.Web.Services.Implementations
 
             return true;
         }
+
         public async Task<int> ContarActivosAsync()
         {
             return await _context.Producto
                 .Include(p => p.IdElementoCatalogoNavigation)
                 .CountAsync(p => p.IdElementoCatalogoNavigation.Estado);
+        }
+
+        private static void ValidarCrear(ProductoCrearDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Nombre))
+            {
+                throw new InvalidOperationException("El nombre del producto es obligatorio.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.CodigoProducto))
+            {
+                throw new InvalidOperationException("El código del producto es obligatorio.");
+            }
+
+            if (!dto.PrecioReferencial.HasValue)
+            {
+                throw new InvalidOperationException("El precio referencial es obligatorio.");
+            }
+
+            if (dto.PrecioReferencial.Value < 0)
+            {
+                throw new InvalidOperationException("El precio referencial no puede ser negativo.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.Descripcion))
+            {
+                throw new InvalidOperationException("La descripción del producto es obligatoria.");
+            }
+
+            if (dto.IdCategoria <= 0)
+            {
+                throw new InvalidOperationException("Selecciona una categoría válida.");
+            }
+
+            if (!dto.IdUnidadMedida.HasValue || dto.IdUnidadMedida.Value <= 0)
+            {
+                throw new InvalidOperationException("Selecciona una unidad de medida válida.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.ImagenUrl))
+            {
+                throw new InvalidOperationException("La URL de la imagen es obligatoria.");
+            }
+
+            if (dto.StockInicial < 0)
+            {
+                throw new InvalidOperationException("El stock inicial no puede ser negativo.");
+            }
+
+            if (dto.StockMinimo < 0)
+            {
+                throw new InvalidOperationException("El stock mínimo no puede ser negativo.");
+            }
+
+            if (dto.StockInicial <= dto.StockMinimo)
+            {
+                throw new InvalidOperationException("El stock inicial debe ser mayor que el stock mínimo.");
+            }
+        }
+
+        private static void ValidarActualizar(ProductoActualizarDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Nombre))
+            {
+                throw new InvalidOperationException("El nombre del producto es obligatorio.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.CodigoProducto))
+            {
+                throw new InvalidOperationException("El código del producto es obligatorio.");
+            }
+
+            if (!dto.PrecioReferencial.HasValue)
+            {
+                throw new InvalidOperationException("El precio referencial es obligatorio.");
+            }
+
+            if (dto.PrecioReferencial.Value < 0)
+            {
+                throw new InvalidOperationException("El precio referencial no puede ser negativo.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.Descripcion))
+            {
+                throw new InvalidOperationException("La descripción del producto es obligatoria.");
+            }
+
+            if (dto.IdCategoria <= 0)
+            {
+                throw new InvalidOperationException("Selecciona una categoría válida.");
+            }
+
+            if (!dto.IdUnidadMedida.HasValue || dto.IdUnidadMedida.Value <= 0)
+            {
+                throw new InvalidOperationException("Selecciona una unidad de medida válida.");
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.ImagenUrl))
+            {
+                throw new InvalidOperationException("La URL de la imagen es obligatoria.");
+            }
+
+            if (dto.StockMinimo < 0)
+            {
+                throw new InvalidOperationException("El stock mínimo no puede ser negativo.");
+            }
+        }
+
+        private async Task ValidarCodigoUnicoParaCrearAsync(string codigoLimpio)
+        {
+            var existeCodigo = await _context.Producto
+                .AsNoTracking()
+                .AnyAsync(p => p.CodigoProducto == codigoLimpio);
+
+            if (existeCodigo)
+            {
+                throw new InvalidOperationException("Ya existe un producto registrado con ese código.");
+            }
+        }
+
+        private async Task ValidarCodigoUnicoParaActualizarAsync(string codigoLimpio, int idProductoActual)
+        {
+            var existeCodigo = await _context.Producto
+                .AsNoTracking()
+                .AnyAsync(p =>
+                    p.IdProducto != idProductoActual &&
+                    p.CodigoProducto == codigoLimpio
+                );
+
+            if (existeCodigo)
+            {
+                throw new InvalidOperationException("Ya existe otro producto registrado con ese código.");
+            }
+        }
+
+        private static string NormalizarCodigo(string codigo)
+        {
+            return codigo.Trim().ToUpper();
+        }
+
+        private static string? NormalizarTexto(string? valor)
+        {
+            if (string.IsNullOrWhiteSpace(valor))
+            {
+                return null;
+            }
+
+            return valor.Trim();
         }
     }
 }
