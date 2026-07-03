@@ -278,7 +278,130 @@ namespace Sistema3S.Web.Services.Implementations
                 throw new InvalidOperationException(ObtenerMensajeSql(ex));
             }
         }
+        public async Task<CompraDetalleCompletoDto?> ObtenerDetalleAsync(int idCompra)
+        {
+            if (idCompra <= 0)
+            {
+                throw new InvalidOperationException("Selecciona una compra válida.");
+            }
 
+            await using var connection = new SqlConnection(_context.Database.GetConnectionString());
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("sp_ObtenerCompraDetalle", connection);
+            command.CommandType = CommandType.StoredProcedure;
+            command.Parameters.AddWithValue("@IdCompra", idCompra);
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            CompraDetalleCompletoDto? compra = null;
+
+            if (await reader.ReadAsync())
+            {
+                compra = new CompraDetalleCompletoDto
+                {
+                    IdCompra = Convert.ToInt32(reader["IdCompra"]),
+                    FechaCompra = Convert.ToDateTime(reader["FechaCompra"]),
+                    FechaEmisionComprobante = reader["FechaEmisionComprobante"] == DBNull.Value
+                        ? null
+                        : Convert.ToDateTime(reader["FechaEmisionComprobante"]),
+
+                    TipoComprobanteProveedor = reader["TipoComprobanteProveedor"]?.ToString() ?? string.Empty,
+                    SerieComprobante = reader["SerieComprobante"]?.ToString() ?? string.Empty,
+                    NumeroComprobante = reader["NumeroComprobante"]?.ToString() ?? string.Empty,
+
+                    Subtotal = Convert.ToDecimal(reader["Subtotal"]),
+                    Igv = Convert.ToDecimal(reader["Igv"]),
+                    Total = Convert.ToDecimal(reader["Total"]),
+                    TotalPagado = Convert.ToDecimal(reader["TotalPagado"]),
+                    SaldoPendiente = Convert.ToDecimal(reader["SaldoPendiente"]),
+
+                    Observacion = reader["Observacion"] == DBNull.Value ? null : reader["Observacion"]?.ToString(),
+
+                    EstadoCompra = reader["EstadoCompra"]?.ToString() ?? string.Empty,
+                    EstadoPago = reader["EstadoPago"]?.ToString() ?? string.Empty,
+
+                    IdProveedor = Convert.ToInt32(reader["IdProveedor"]),
+                    RucProveedor = reader["Ruc"]?.ToString() ?? string.Empty,
+                    RazonSocialProveedor = reader["RazonSocial"]?.ToString() ?? string.Empty,
+                    NombreComercialProveedor = reader["NombreComercial"] == DBNull.Value ? null : reader["NombreComercial"]?.ToString(),
+                    CorreoProveedor = reader["Correo"] == DBNull.Value ? null : reader["Correo"]?.ToString(),
+                    TelefonoProveedor = reader["Telefono"] == DBNull.Value ? null : reader["Telefono"]?.ToString(),
+                    DireccionProveedor = reader["Direccion"] == DBNull.Value ? null : reader["Direccion"]?.ToString()
+                };
+            }
+
+            if (compra == null)
+            {
+                return null;
+            }
+
+            await reader.NextResultAsync();
+
+            if (await reader.ReadAsync())
+            {
+                compra.GuiaRemision = new GuiaRemisionCompraDetalleDto
+                {
+                    IdGuiaRemisionCompra = Convert.ToInt32(reader["IdGuiaRemisionCompra"]),
+                    NumeroGuia = reader["NumeroGuia"]?.ToString() ?? string.Empty,
+                    FechaEmision = Convert.ToDateTime(reader["FechaEmision"]),
+                    FechaTraslado = Convert.ToDateTime(reader["FechaTraslado"]),
+                    PuntoPartida = reader["PuntoPartida"]?.ToString() ?? string.Empty,
+                    PuntoLlegada = reader["PuntoLlegada"]?.ToString() ?? string.Empty,
+                    Transportista = reader["Transportista"] == DBNull.Value ? null : reader["Transportista"]?.ToString(),
+                    RucTransportista = reader["RucTransportista"] == DBNull.Value ? null : reader["RucTransportista"]?.ToString(),
+                    PlacaVehiculo = reader["PlacaVehiculo"] == DBNull.Value ? null : reader["PlacaVehiculo"]?.ToString(),
+                    Observacion = reader["Observacion"] == DBNull.Value ? null : reader["Observacion"]?.ToString()
+                };
+            }
+
+            await reader.NextResultAsync();
+
+            while (await reader.ReadAsync())
+            {
+                compra.Detalles.Add(new DetalleCompraDetalleDto
+                {
+                    IdDetalleCompra = Convert.ToInt32(reader["IdDetalleCompra"]),
+                    IdProducto = Convert.ToInt32(reader["IdProducto"]),
+                    CodigoProducto = reader["CodigoProducto"]?.ToString() ?? string.Empty,
+                    Producto = reader["Producto"]?.ToString() ?? string.Empty,
+                    Cantidad = Convert.ToInt32(reader["Cantidad"]),
+                    PrecioCompra = Convert.ToDecimal(reader["PrecioCompra"]),
+                    Subtotal = Convert.ToDecimal(reader["Subtotal"])
+                });
+            }
+
+            await reader.NextResultAsync();
+
+            while (await reader.ReadAsync())
+            {
+                compra.Pagos.Add(new PagoCompraDetalleDto
+                {
+                    IdPagoCompra = Convert.ToInt32(reader["IdPagoCompra"]),
+                    MetodoPago = reader["MetodoPago"]?.ToString() ?? string.Empty,
+                    MontoPagado = Convert.ToDecimal(reader["MontoPagado"]),
+                    FechaPago = Convert.ToDateTime(reader["FechaPago"]),
+                    Observacion = reader["Observacion"] == DBNull.Value ? null : reader["Observacion"]?.ToString()
+                });
+            }
+
+            await reader.NextResultAsync();
+
+            while (await reader.ReadAsync())
+            {
+                compra.Cuotas.Add(new CuotaCompraDetalleDto
+                {
+                    IdCuotaCompra = Convert.ToInt32(reader["IdCuotaCompra"]),
+                    NumeroCuota = Convert.ToInt32(reader["NumeroCuota"]),
+                    FechaVencimiento = Convert.ToDateTime(reader["FechaVencimiento"]),
+                    MontoCuota = Convert.ToDecimal(reader["MontoCuota"]),
+                    MontoPagado = Convert.ToDecimal(reader["MontoPagado"]),
+                    EstadoCuota = reader["EstadoCuota"]?.ToString() ?? string.Empty
+                });
+            }
+
+            return compra;
+        }
         private static void ValidarCompra(CompraCrearDto dto)
         {
             if (dto.IdProveedor <= 0)

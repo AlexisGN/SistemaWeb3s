@@ -27,6 +27,10 @@ builder.Services.AddHttpClient<IConsultaDocumentoService, ConsultaDocumentoServi
 builder.Services.AddHttpClient<IProveedorService, ProveedorService>();
 builder.Services.AddScoped<IInventarioService, InventarioService>();
 builder.Services.AddScoped<ICompraService, CompraService>();
+builder.Services.AddScoped<IPdfCompraService, PdfCompraService>();
+builder.Services.AddScoped<IVentaService, VentaService>();
+builder.Services.AddScoped<IPdfVentaService, PdfVentaService>();
+builder.Services.AddScoped<IExcelVentaService, ExcelVentaService>();
 
 // Servicios para PDF
 builder.Services.AddHttpClient();

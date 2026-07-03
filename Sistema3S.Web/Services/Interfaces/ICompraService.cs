@@ -17,6 +17,7 @@ namespace Sistema3S.Web.Services.Interfaces
         );
 
         Task<CompraRegistroResultadoDto> RegistrarPagoAsync(PagoCompraCrearDto dto);
+        Task<CompraDetalleCompletoDto?> ObtenerDetalleAsync(int idCompra);
 
         Task<bool> AnularAsync(int idCompra, AnularCompraDto dto);
     }

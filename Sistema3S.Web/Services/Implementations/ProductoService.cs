@@ -76,27 +76,38 @@ namespace Sistema3S.Web.Services.Implementations
 
                     Nombre = p.IdElementoCatalogoNavigation.Nombre,
                     Descripcion = p.IdElementoCatalogoNavigation.Descripcion,
+
                     PrecioReferencial = p.IdElementoCatalogoNavigation.PrecioReferencial,
+
+                    // Precio final con IGV incluido para ventas internas.
+                    PrecioVenta = p.IdElementoCatalogoNavigation.PrecioReferencial ?? 0,
+                    PrecioConIgv = p.IdElementoCatalogoNavigation.PrecioReferencial ?? 0,
+                    PrecioUnitario = p.IdElementoCatalogoNavigation.PrecioReferencial ?? 0,
+
                     ImagenUrl = p.IdElementoCatalogoNavigation.ImagenUrl,
                     Estado = p.IdElementoCatalogoNavigation.Estado,
 
                     Categoria = p.IdCategoriaNavigation.Nombre,
                     Marca = p.IdMarcaNavigation != null
-                        ? p.IdMarcaNavigation.Nombre
-                        : null,
+        ? p.IdMarcaNavigation.Nombre
+        : null,
                     UnidadMedida = p.IdUnidadMedidaNavigation != null
-                        ? p.IdUnidadMedidaNavigation.Nombre
-                        : null,
+        ? p.IdUnidadMedidaNavigation.Nombre
+        : null,
 
                     CodigoProducto = p.CodigoProducto,
+                    Codigo = p.CodigoProducto,
+
                     FichaTecnicaPdf = p.FichaTecnicaPdf,
 
                     StockActual = p.Inventario != null
-                        ? p.Inventario.StockActual
-                        : 0,
+        ? p.Inventario.StockActual
+        : 0,
                     StockMinimo = p.Inventario != null
-                        ? p.Inventario.StockMinimo
-                        : 0
+        ? p.Inventario.StockMinimo
+        : 0,
+
+                    AplicaInventario = p.AplicaInventario
                 })
                 .ToListAsync();
 
@@ -130,27 +141,38 @@ namespace Sistema3S.Web.Services.Implementations
 
                     Nombre = p.IdElementoCatalogoNavigation.Nombre,
                     Descripcion = p.IdElementoCatalogoNavigation.Descripcion,
+
                     PrecioReferencial = p.IdElementoCatalogoNavigation.PrecioReferencial,
+
+                    // Precio final con IGV incluido para ventas internas.
+                    PrecioVenta = p.IdElementoCatalogoNavigation.PrecioReferencial ?? 0,
+                    PrecioConIgv = p.IdElementoCatalogoNavigation.PrecioReferencial ?? 0,
+                    PrecioUnitario = p.IdElementoCatalogoNavigation.PrecioReferencial ?? 0,
+
                     ImagenUrl = p.IdElementoCatalogoNavigation.ImagenUrl,
                     Estado = p.IdElementoCatalogoNavigation.Estado,
 
                     Categoria = p.IdCategoriaNavigation.Nombre,
                     Marca = p.IdMarcaNavigation != null
-                        ? p.IdMarcaNavigation.Nombre
-                        : null,
+        ? p.IdMarcaNavigation.Nombre
+        : null,
                     UnidadMedida = p.IdUnidadMedidaNavigation != null
-                        ? p.IdUnidadMedidaNavigation.Nombre
-                        : null,
+        ? p.IdUnidadMedidaNavigation.Nombre
+        : null,
 
                     CodigoProducto = p.CodigoProducto,
+                    Codigo = p.CodigoProducto,
+
                     FichaTecnicaPdf = p.FichaTecnicaPdf,
 
                     StockActual = p.Inventario != null
-                        ? p.Inventario.StockActual
-                        : 0,
+        ? p.Inventario.StockActual
+        : 0,
                     StockMinimo = p.Inventario != null
-                        ? p.Inventario.StockMinimo
-                        : 0
+        ? p.Inventario.StockMinimo
+        : 0,
+
+                    AplicaInventario = p.AplicaInventario
                 })
                 .FirstOrDefaultAsync();
         }

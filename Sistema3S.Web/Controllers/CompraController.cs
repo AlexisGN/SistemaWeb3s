@@ -9,10 +9,15 @@ namespace Sistema3S.Web.Controllers
     public class CompraController : ControllerBase
     {
         private readonly ICompraService _compraService;
+        private readonly IPdfCompraService _pdfCompraService;
 
-        public CompraController(ICompraService compraService)
+        public CompraController(
+            ICompraService compraService,
+            IPdfCompraService pdfCompraService
+        )
         {
             _compraService = compraService;
+            _pdfCompraService = pdfCompraService;
         }
 
         [HttpGet]
@@ -43,6 +48,65 @@ namespace Sistema3S.Web.Controllers
                 return StatusCode(500, new
                 {
                     mensaje = "No se pudieron cargar las compras."
+                });
+            }
+        }
+
+        [HttpGet("{idCompra:int}/detalle")]
+        public async Task<IActionResult> ObtenerDetalle(int idCompra)
+        {
+            try
+            {
+                var compra = await _compraService.ObtenerDetalleAsync(idCompra);
+
+                if (compra == null)
+                {
+                    return NotFound(new
+                    {
+                        mensaje = "No se encontró la compra seleccionada."
+                    });
+                }
+
+                return Ok(compra);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo obtener el detalle de la compra."
+                });
+            }
+        }
+
+        [HttpGet("{idCompra:int}/pdf")]
+        public async Task<IActionResult> GenerarPdf(int idCompra)
+        {
+            try
+            {
+                var pdfBytes = await _pdfCompraService.GenerarPdfCompraAsync(idCompra);
+                var nombreArchivo = $"registro-compra-{idCompra}.pdf";
+
+                return File(pdfBytes, "application/pdf", nombreArchivo);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo generar el PDF de la compra."
                 });
             }
         }
