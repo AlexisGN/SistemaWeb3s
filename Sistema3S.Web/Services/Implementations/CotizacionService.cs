@@ -1,8 +1,9 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Data;
+using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 using Sistema3S.Web.Data;
 using Sistema3S.Web.DTOs.Comun;
 using Sistema3S.Web.DTOs.Cotizacion;
-using Sistema3S.Web.Models;
 using Sistema3S.Web.Services.Interfaces;
 using Sistema3S.Web.Services.Pdf;
 
@@ -11,89 +12,64 @@ namespace Sistema3S.Web.Services.Implementations
     public class CotizacionService : ICotizacionService
     {
         private readonly Bd3sContext _context;
-
-        private const decimal PorcentajeIgv = 0.18m;
-
         private readonly IPdfCotizacionService _pdfCotizacionService;
+        private readonly IEmailService _emailService;
+        private readonly IWhatsAppService _whatsAppService;
+        private readonly IWebHostEnvironment _environment;
+        private readonly IConfiguration _configuration;
 
         public CotizacionService(
-            Bd3sContext context,
-            IPdfCotizacionService pdfCotizacionService
+    Bd3sContext context,
+    IPdfCotizacionService pdfCotizacionService,
+    IEmailService emailService,
+    IWhatsAppService whatsAppService,
+    IWebHostEnvironment environment,
+    IConfiguration configuration
 )
         {
             _context = context;
             _pdfCotizacionService = pdfCotizacionService;
+            _emailService = emailService;
+            _whatsAppService = whatsAppService;
+            _environment = environment;
+            _configuration = configuration;
         }
 
         public async Task<ResultadoPaginadoDto<CotizacionListadoDto>> ListarAsync(
             string? buscar,
+            string? estado,
+            string? origen,
             int pagina,
             int tamanioPagina
         )
         {
-            if (pagina <= 0)
-            {
-                pagina = 1;
-            }
-
-            if (tamanioPagina <= 0)
-            {
-                tamanioPagina = 5;
-            }
-
-            if (tamanioPagina > 50)
-            {
-                tamanioPagina = 50;
-            }
-
-            var query = _context.Cotizacion.AsQueryable();
-
-            if (!string.IsNullOrWhiteSpace(buscar))
-            {
-                var texto = buscar.Trim();
-
-                query = query.Where(c =>
-                    (c.Observacion != null && c.Observacion.Contains(texto)) ||
-                    c.OrigenCotizacion.Contains(texto) ||
-                    _context.EstadoCotizacion.Any(e =>
-                        e.IdEstadoCotizacion == c.IdEstadoCotizacion &&
-                        e.Nombre.Contains(texto)
-                    ) ||
-                    _context.Cliente.Any(cl =>
-                        cl.IdCliente == c.IdCliente &&
-                        cl.NumeroDocumento.Contains(texto)
-                    ) ||
-                    _context.ClientePersonaNatural.Any(pn =>
-                        pn.IdCliente == c.IdCliente &&
-                        (
-                            pn.Nombres.Contains(texto) ||
-                            pn.ApellidoPaterno.Contains(texto) ||
-                            (pn.ApellidoMaterno != null && pn.ApellidoMaterno.Contains(texto))
-                        )
-                    ) ||
-                    _context.ClienteEmpresa.Any(ce =>
-                        ce.IdCliente == c.IdCliente &&
-                        (
-                            ce.RazonSocial.Contains(texto) ||
-                            (ce.NombreComercial != null && ce.NombreComercial.Contains(texto))
-                        )
-                    )
-                );
-            }
-
-            var totalRegistros = await query.CountAsync();
-
-            var cotizaciones = await query
-                .OrderByDescending(c => c.IdCotizacion)
-                .Skip((pagina - 1) * tamanioPagina)
-                .Take(tamanioPagina)
-                .ToListAsync();
+            if (pagina <= 0) pagina = 1;
+            if (tamanioPagina <= 0) tamanioPagina = 8;
+            if (tamanioPagina > 50) tamanioPagina = 50;
 
             var items = new List<CotizacionListadoDto>();
+            var totalRegistros = 0;
 
-            foreach (var cotizacion in cotizaciones)
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("dbo.sp_ListarCotizaciones", connection)
             {
-                var item = await MapearCotizacionAsync(cotizacion, incluirDetalles: false);
+                CommandType = CommandType.StoredProcedure
+            };
+
+            command.Parameters.AddWithValue("@Buscar", ValorDb(buscar));
+            command.Parameters.AddWithValue("@Estado", ValorDb(estado));
+            command.Parameters.AddWithValue("@Origen", ValorDb(origen));
+            command.Parameters.AddWithValue("@Pagina", pagina);
+            command.Parameters.AddWithValue("@TamanioPagina", tamanioPagina);
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
+            {
+                var item = MapearListado(reader);
+                totalRegistros = LeerInt(reader, "TotalRegistros");
                 items.Add(item);
             }
 
@@ -108,236 +84,262 @@ namespace Sistema3S.Web.Services.Implementations
 
         public async Task<CotizacionListadoDto?> ObtenerPorIdAsync(int idCotizacion)
         {
-            var cotizacion = await _context.Cotizacion
-                .FirstOrDefaultAsync(c => c.IdCotizacion == idCotizacion);
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("dbo.sp_ObtenerCotizacionDetalle", connection)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
+
+            command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            CotizacionListadoDto? cotizacion = null;
+
+            if (await reader.ReadAsync())
+            {
+                cotizacion = MapearListado(reader);
+            }
 
             if (cotizacion == null)
             {
                 return null;
             }
 
-            return await MapearCotizacionAsync(cotizacion, incluirDetalles: true);
+            if (await reader.NextResultAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    cotizacion.Detalles.Add(MapearDetalle(reader));
+                }
+            }
+
+            return cotizacion;
         }
 
         public async Task<CotizacionListadoDto> CrearAsync(CotizacionCrearDto dto)
         {
-            await ValidarCrearActualizarAsync(
-                dto.IdCliente,
-                dto.IdEstadoCotizacion,
-                dto.OrigenCotizacion,
-                dto.Descuento,
-                dto.Detalles
-            );
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
 
-            await using var transaction = await _context.Database.BeginTransactionAsync();
-
-            var cotizacion = new Cotizacion
+            await using var command = new SqlCommand("dbo.sp_RegistrarCotizacion", connection)
             {
-                IdCliente = dto.IdCliente,
-                IdUsuarioRegistro = dto.IdUsuarioRegistro,
-                IdUsuarioAtencion = dto.IdUsuarioAtencion,
-                IdEstadoCotizacion = dto.IdEstadoCotizacion,
-                FechaCotizacion = DateTime.Now,
-
-                OrigenCotizacion = NormalizarOrigen(dto.OrigenCotizacion),
-
-                Subtotal = 0,
-                Descuento = dto.Descuento,
-                Igv = 0,
-                Total = 0,
-                TotalReferencial = 0,
-
-                Observacion = NormalizarTexto(dto.Observacion),
-                ArchivoPdf = NormalizarTexto(dto.ArchivoPdf),
-                CorreoEnviado = dto.CorreoEnviado
+                CommandType = CommandType.StoredProcedure
             };
 
-            _context.Cotizacion.Add(cotizacion);
-            await _context.SaveChangesAsync();
+            command.Parameters.AddWithValue("@IdCliente", dto.IdCliente);
+            command.Parameters.AddWithValue("@IdUsuarioRegistro", ValorDb(dto.IdUsuarioRegistro));
+            command.Parameters.AddWithValue("@OrigenCotizacion", ValorDb(dto.OrigenCotizacion));
+            command.Parameters.AddWithValue("@Descuento", dto.Descuento);
+            command.Parameters.AddWithValue("@Observacion", ValorDb(dto.Observacion));
 
-            await RegistrarDetallesAsync(cotizacion.IdCotizacion, dto.Detalles);
-
-            await RecalcularTotalesAsync(cotizacion, dto.Descuento);
-
-            await _context.SaveChangesAsync();
-            await transaction.CommitAsync();
-            await GenerarPdfAsync(cotizacion.IdCotizacion);
-
-            var cotizacionCreada = await ObtenerPorIdAsync(cotizacion.IdCotizacion);
-
-            if (cotizacionCreada == null)
-            {
-                throw new InvalidOperationException("No se pudo recuperar la cotización creada.");
-            }
-
-            return cotizacionCreada;
-        }
-
-        public async Task<bool> ActualizarAsync(int idCotizacion, CotizacionActualizarDto dto)
-        {
-            await ValidarCrearActualizarAsync(
-                dto.IdCliente,
-                dto.IdEstadoCotizacion,
-                dto.OrigenCotizacion,
-                dto.Descuento,
-                dto.Detalles
+            var detallesParam = command.Parameters.AddWithValue(
+                "@Detalles",
+                CrearTablaDetalles(dto.Detalles)
             );
 
-            var cotizacion = await _context.Cotizacion
-                .FirstOrDefaultAsync(c => c.IdCotizacion == idCotizacion);
+            detallesParam.SqlDbType = SqlDbType.Structured;
+            detallesParam.TypeName = "dbo.CotizacionDetalleType";
+
+            var idCotizacion = 0;
+
+            await using (var reader = await command.ExecuteReaderAsync())
+            {
+                if (await reader.ReadAsync())
+                {
+                    idCotizacion = LeerInt(reader, "IdCotizacion");
+                }
+            }
+
+            if (idCotizacion <= 0)
+            {
+                throw new InvalidOperationException("No se pudo registrar la cotización.");
+            }
+
+            await GenerarPdfAsync(idCotizacion);
+
+            var cotizacion = await ObtenerPorIdAsync(idCotizacion);
 
             if (cotizacion == null)
             {
-                return false;
+                throw new InvalidOperationException("No se pudo recuperar la cotización registrada.");
             }
 
-            await using var transaction = await _context.Database.BeginTransactionAsync();
+            return cotizacion;
+        }
 
-            cotizacion.IdCliente = dto.IdCliente;
-            cotizacion.IdEstadoCotizacion = dto.IdEstadoCotizacion;
-            cotizacion.IdUsuarioAtencion = dto.IdUsuarioAtencion;
+        public async Task<bool> CancelarAsync(int idCotizacion, int? idUsuarioAtencion)
+        {
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
 
-            cotizacion.OrigenCotizacion = NormalizarOrigen(dto.OrigenCotizacion);
+            await using var command = new SqlCommand("dbo.sp_CancelarCotizacion", connection)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
 
-            cotizacion.Observacion = NormalizarTexto(dto.Observacion);
-            cotizacion.ArchivoPdf = NormalizarTexto(dto.ArchivoPdf);
-            cotizacion.CorreoEnviado = dto.CorreoEnviado;
+            command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+            command.Parameters.AddWithValue("@IdUsuarioAtencion", ValorDb(idUsuarioAtencion));
 
-            var detallesActuales = await _context.DetalleCotizacion
-                .Where(d => d.IdCotizacion == idCotizacion)
-                .ToListAsync();
-
-            _context.DetalleCotizacion.RemoveRange(detallesActuales);
-            await _context.SaveChangesAsync();
-
-            await RegistrarDetallesAsync(idCotizacion, dto.Detalles);
-
-            await RecalcularTotalesAsync(cotizacion, dto.Descuento);
-
-            await _context.SaveChangesAsync();
-            await transaction.CommitAsync();
-            await GenerarPdfAsync(cotizacion.IdCotizacion);
+            await command.ExecuteNonQueryAsync();
 
             return true;
         }
 
-        public async Task<bool> CancelarAsync(int idCotizacion)
+        public async Task<bool> CambiarEstadoAsync(
+            int idCotizacion,
+            CotizacionCambiarEstadoDto dto
+        )
         {
-            var cotizacion = await _context.Cotizacion
-                .FirstOrDefaultAsync(c => c.IdCotizacion == idCotizacion);
+            var nuevoEstado = dto.NuevoEstado;
 
-            if (cotizacion == null)
+            if (string.IsNullOrWhiteSpace(nuevoEstado) && dto.IdEstadoCotizacion.HasValue)
             {
-                return false;
+                nuevoEstado = await ObtenerNombreEstadoAsync(dto.IdEstadoCotizacion.Value);
             }
 
-            var estadoCancelada = await _context.EstadoCotizacion
-                .Where(e => e.Nombre == "Cancelada")
-                .Select(e => e.IdEstadoCotizacion)
-                .FirstOrDefaultAsync();
-
-            if (estadoCancelada == 0)
+            if (string.IsNullOrWhiteSpace(nuevoEstado))
             {
-                throw new InvalidOperationException("No existe el estado Cancelada.");
+                throw new InvalidOperationException("Selecciona el nuevo estado de la cotización.");
             }
 
-            cotizacion.IdEstadoCotizacion = estadoCancelada;
-            await _context.SaveChangesAsync();
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
 
-            return true;
-        }
-        public async Task<bool> CambiarEstadoAsync(int idCotizacion, int idEstadoCotizacion)
-        {
-            var cotizacion = await _context.Cotizacion
-                .FirstOrDefaultAsync(c => c.IdCotizacion == idCotizacion);
-
-            if (cotizacion == null)
+            await using var command = new SqlCommand("dbo.sp_CambiarEstadoCotizacion", connection)
             {
-                return false;
-            }
+                CommandType = CommandType.StoredProcedure
+            };
 
-            var existeEstado = await _context.EstadoCotizacion
-                .AnyAsync(e => e.IdEstadoCotizacion == idEstadoCotizacion && e.Estado);
+            command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+            command.Parameters.AddWithValue("@NuevoEstado", nuevoEstado);
+            command.Parameters.AddWithValue("@IdUsuarioAtencion", ValorDb(dto.IdUsuarioAtencion));
 
-            if (!existeEstado)
-            {
-                throw new InvalidOperationException("El estado seleccionado no es válido.");
-            }
-
-            cotizacion.IdEstadoCotizacion = idEstadoCotizacion;
-            await _context.SaveChangesAsync();
+            await command.ExecuteNonQueryAsync();
 
             return true;
         }
 
         public async Task<string> GenerarPdfAsync(int idCotizacion)
         {
-            return await _pdfCotizacionService.GenerarCotizacionAsync(idCotizacion);
+            var ruta = await _pdfCotizacionService.GenerarCotizacionAsync(idCotizacion);
+
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("dbo.sp_ActualizarPdfCotizacion", connection)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
+
+            command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+            command.Parameters.AddWithValue("@ArchivoPdf", ruta);
+
+            await command.ExecuteNonQueryAsync();
+
+            return ruta;
         }
 
-        public async Task<bool> MarcarCorreoEnviadoAsync(int idCotizacion)
+        public async Task<bool> EnviarCorreoAsync(
+    int idCotizacion,
+    int? idUsuarioAtencion
+)
         {
-            var cotizacion = await _context.Cotizacion
-                .FirstOrDefaultAsync(c => c.IdCotizacion == idCotizacion);
+            var cotizacion = await ObtenerPorIdAsync(idCotizacion);
 
             if (cotizacion == null)
             {
                 return false;
             }
 
-            if (string.IsNullOrWhiteSpace(cotizacion.ArchivoPdf))
+            var correoDestino = cotizacion.CorreoCliente?.Trim();
+
+            if (string.IsNullOrWhiteSpace(correoDestino))
             {
-                await GenerarPdfAsync(idCotizacion);
+                throw new InvalidOperationException(
+                    "El cliente no tiene correo registrado. Agrega un correo antes de enviar la cotización."
+                );
             }
 
-            var correoCliente = await _context.Cliente
-                .Where(c => c.IdCliente == cotizacion.IdCliente)
-                .Select(c => c.Correo)
-                .FirstOrDefaultAsync();
+            var archivoPdf = cotizacion.ArchivoPdf;
 
-            if (string.IsNullOrWhiteSpace(correoCliente))
+            if (string.IsNullOrWhiteSpace(archivoPdf))
             {
-                throw new InvalidOperationException("El cliente no tiene correo registrado.");
-            }
+                archivoPdf = await GenerarPdfAsync(idCotizacion);
 
-            cotizacion.CorreoEnviado = true;
+                var cotizacionActualizada = await ObtenerPorIdAsync(idCotizacion);
 
-            var estadoRespondida = await _context.EstadoCotizacion
-                .Where(e => e.Nombre == "Respondida")
-                .Select(e => e.IdEstadoCotizacion)
-                .FirstOrDefaultAsync();
-
-            if (estadoRespondida != 0)
-            {
-                var estadoActual = await _context.EstadoCotizacion
-                    .Where(e => e.IdEstadoCotizacion == cotizacion.IdEstadoCotizacion)
-                    .Select(e => e.Nombre)
-                    .FirstOrDefaultAsync();
-
-                if (estadoActual == "Pendiente" || estadoActual == "En revisión")
+                if (cotizacionActualizada == null)
                 {
-                    cotizacion.IdEstadoCotizacion = estadoRespondida;
+                    return false;
                 }
+
+                cotizacion = cotizacionActualizada;
             }
 
-            var envio = new EnvioCorreo
+            var rutaFisica = ObtenerRutaFisicaArchivo(archivoPdf);
+
+            var asunto = $"{cotizacion.CodigoCotizacion} - Empresa 3S";
+
+            var cuerpo =
+        $@"Estimado(a) cliente,
+
+Adjuntamos la cotización solicitada correspondiente a productos y/o servicios de Empresa 3S.
+
+Código de cotización: {cotizacion.CodigoCotizacion}
+Total referencial: S/ {cotizacion.Total:0.00}
+
+Puede revisar el documento adjunto para validar el detalle de la propuesta.
+
+Quedamos atentos a su confirmación.
+
+Atentamente,
+Empresa 3S";
+
+            try
             {
-                IdCotizacion = cotizacion.IdCotizacion,
-                IdComprobante = null,
-                IdUsuarioRegistro = cotizacion.IdUsuarioAtencion ?? cotizacion.IdUsuarioRegistro,
-                Destinatario = correoCliente,
-                Asunto = $"Cotización COT-{cotizacion.IdCotizacion.ToString().PadLeft(5, '0')} - 3S",
-                Cuerpo = $"Se registró el envío de la cotización COT-{cotizacion.IdCotizacion.ToString().PadLeft(5, '0')} al cliente.",
-                FechaEnvio = DateTime.Now,
-                Exitoso = true,
-                MensajeError = null
-            };
+                await _emailService.EnviarConAdjuntoAsync(
+                    correoDestino,
+                    asunto,
+                    cuerpo,
+                    rutaFisica
+                );
 
-            _context.EnvioCorreo.Add(envio);
+                await RegistrarEnvioCorreoAsync(
+                    cotizacion,
+                    idUsuarioAtencion,
+                    asunto,
+                    cuerpo,
+                    true,
+                    null
+                );
 
-            await _context.SaveChangesAsync();
+                await MarcarRespondidaSqlAsync(
+                    idCotizacion,
+                    idUsuarioAtencion,
+                    "Correo",
+                    archivoPdf
+                );
 
-            return true;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                await RegistrarEnvioCorreoAsync(
+                    cotizacion,
+                    idUsuarioAtencion,
+                    asunto,
+                    cuerpo,
+                    false,
+                    ex.Message
+                );
+
+                throw new InvalidOperationException(
+                    $"No se pudo enviar el correo: {ex.Message}"
+                );
+            }
         }
 
         public async Task<CotizacionWhatsAppDto> ObtenerWhatsAppAsync(int idCotizacion)
@@ -349,167 +351,238 @@ namespace Sistema3S.Web.Services.Implementations
                 throw new InvalidOperationException("Cotización no encontrada.");
             }
 
-            var telefono = await _context.Cliente
-                .Where(c => c.IdCliente == cotizacion.IdCliente)
-                .Select(c => c.Telefono)
-                .FirstOrDefaultAsync();
+            var telefonoCliente = cotizacion.TelefonoCliente?.Trim();
 
-            if (string.IsNullOrWhiteSpace(telefono))
+            if (string.IsNullOrWhiteSpace(telefonoCliente))
             {
-                throw new InvalidOperationException("El cliente no tiene teléfono registrado.");
+                throw new InvalidOperationException(
+                    "El cliente no tiene teléfono registrado. Agrega un número antes de enviar por WhatsApp."
+                );
             }
 
-            var telefonoLimpio = LimpiarTelefonoWhatsApp(telefono);
+            var archivoPdf = cotizacion.ArchivoPdf;
 
-            var mensaje =
-                $"Hola, le saludamos de 3S - Servicios y Soluciones Superiores. " +
-                $"Le compartimos la cotización COT-{idCotizacion.ToString().PadLeft(5, '0')} " +
-                $"por un total de S/ {cotizacion.Total:0.00}. " +
-                $"Estado: {cotizacion.EstadoCotizacion}.";
-
-            if (!string.IsNullOrWhiteSpace(cotizacion.ArchivoPdf))
+            if (string.IsNullOrWhiteSpace(archivoPdf))
             {
-                mensaje += $" PDF: {cotizacion.ArchivoPdf}";
+                archivoPdf = await GenerarPdfAsync(idCotizacion);
             }
 
-            var url = $"https://wa.me/{telefonoLimpio}?text={Uri.EscapeDataString(mensaje)}";
+            var telefono = LimpiarTelefonoWhatsApp(telefonoCliente);
+
+            var mensaje = CrearMensajeWhatsAppCliente(cotizacion);
+
+            var url = $"https://wa.me/{telefono}?text={Uri.EscapeDataString(mensaje)}";
 
             return new CotizacionWhatsAppDto
             {
-                Telefono = telefonoLimpio,
+                IdCotizacion = cotizacion.IdCotizacion,
+                CodigoCotizacion = cotizacion.CodigoCotizacion,
+                Telefono = telefono,
                 Mensaje = mensaje,
-                Url = url
+                Url = url,
+                ArchivoPdf = archivoPdf,
+                RequiereConfirmacionRespondida = true
             };
         }
-
-        public async Task<int> ConvertirEnVentaAsync(int idCotizacion, int? idUsuarioRegistro)
+        public async Task<CotizacionWhatsAppDto> EnviarWhatsAppAsync(
+    int idCotizacion,
+    int? idUsuarioAtencion
+)
         {
-            var cotizacion = await _context.Cotizacion
-                .FirstOrDefaultAsync(c => c.IdCotizacion == idCotizacion);
+            var cotizacion = await ObtenerPorIdAsync(idCotizacion);
 
             if (cotizacion == null)
             {
                 throw new InvalidOperationException("Cotización no encontrada.");
             }
 
-            var yaExisteVenta = await _context.Venta
-                .AnyAsync(v => v.IdCotizacion == idCotizacion);
+            var telefonoCliente = cotizacion.TelefonoCliente?.Trim();
 
-            if (yaExisteVenta)
+            if (string.IsNullOrWhiteSpace(telefonoCliente))
             {
-                throw new InvalidOperationException("Esta cotización ya fue convertida en venta.");
+                throw new InvalidOperationException(
+                    "El cliente no tiene teléfono registrado. Agrega un número antes de enviar por WhatsApp."
+                );
             }
 
-            var estadoCotizacion = await _context.EstadoCotizacion
-                .Where(e => e.IdEstadoCotizacion == cotizacion.IdEstadoCotizacion)
-                .Select(e => e.Nombre)
-                .FirstOrDefaultAsync();
+            var archivoPdf = cotizacion.ArchivoPdf;
 
-            if (estadoCotizacion == "Cancelada")
+            if (string.IsNullOrWhiteSpace(archivoPdf))
             {
-                throw new InvalidOperationException("No se puede convertir una cotización cancelada en venta.");
+                archivoPdf = await GenerarPdfAsync(idCotizacion);
+
+                var cotizacionActualizada = await ObtenerPorIdAsync(idCotizacion);
+
+                if (cotizacionActualizada == null)
+                {
+                    throw new InvalidOperationException("No se pudo recuperar la cotización.");
+                }
+
+                cotizacion = cotizacionActualizada;
             }
 
-            var detalles = await _context.DetalleCotizacion
-                .Where(d => d.IdCotizacion == idCotizacion)
-                .ToListAsync();
+            var telefono = LimpiarTelefonoWhatsApp(telefonoCliente);
+            var mensaje = CrearMensajeWhatsAppCliente(cotizacion);
 
-            if (detalles.Count == 0)
+            var modo = (_configuration["WhatsApp:Mode"] ?? "WebLocal").Trim();
+
+            if (modo.Equals("CloudApi", StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException("La cotización no tiene detalles para convertir en venta.");
+                var rutaFisica = ObtenerRutaFisicaArchivo(archivoPdf);
+                var nombreArchivo = Path.GetFileName(rutaFisica);
+
+                await _whatsAppService.EnviarDocumentoPdfAsync(
+                    telefono,
+                    rutaFisica,
+                    nombreArchivo,
+                    mensaje
+                );
+
+                await MarcarRespondidaSqlAsync(
+                    idCotizacion,
+                    idUsuarioAtencion,
+                    "WhatsApp",
+                    archivoPdf
+                );
+
+                return new CotizacionWhatsAppDto
+                {
+                    IdCotizacion = cotizacion.IdCotizacion,
+                    CodigoCotizacion = cotizacion.CodigoCotizacion,
+                    Telefono = telefono,
+                    Mensaje = mensaje,
+                    Url = string.Empty,
+                    ArchivoPdf = archivoPdf,
+                    RequiereConfirmacionRespondida = false
+                };
             }
 
-            var idEstadoVenta = await _context.EstadoVenta
-                .Where(e => e.Nombre == "Registrada")
-                .Select(e => e.IdEstadoVenta)
-                .FirstOrDefaultAsync();
+            var url = $"https://wa.me/{telefono}?text={Uri.EscapeDataString(mensaje)}";
 
-            if (idEstadoVenta == 0)
+            return new CotizacionWhatsAppDto
             {
-                idEstadoVenta = await _context.EstadoVenta
-                    .Where(e => e.Estado)
-                    .OrderBy(e => e.IdEstadoVenta)
-                    .Select(e => e.IdEstadoVenta)
-                    .FirstOrDefaultAsync();
-            }
-
-            if (idEstadoVenta == 0)
-            {
-                throw new InvalidOperationException("No existe un estado de venta válido.");
-            }
-
-            var idUsuarioFinal =
-                idUsuarioRegistro ??
-                cotizacion.IdUsuarioAtencion ??
-                cotizacion.IdUsuarioRegistro ??
-                await _context.Usuario
-                    .OrderBy(u => u.IdUsuario)
-                    .Select(u => u.IdUsuario)
-                    .FirstOrDefaultAsync();
-
-            if (idUsuarioFinal == 0)
-            {
-                throw new InvalidOperationException("No existe usuario para registrar la venta.");
-            }
-
-            await using var transaction = await _context.Database.BeginTransactionAsync();
-
-            var venta = new Venta
-            {
-                IdCliente = cotizacion.IdCliente,
                 IdCotizacion = cotizacion.IdCotizacion,
-                IdUsuarioRegistro = idUsuarioFinal,
-                IdEstadoVenta = idEstadoVenta,
-                FechaVenta = DateTime.Now,
-                Subtotal = cotizacion.Subtotal,
-                Igv = cotizacion.Igv,
-                Total = cotizacion.Total
+                CodigoCotizacion = cotizacion.CodigoCotizacion,
+                Telefono = telefono,
+                Mensaje = mensaje,
+                Url = url,
+                ArchivoPdf = archivoPdf,
+                RequiereConfirmacionRespondida = true
+            };
+        }
+
+        public async Task<bool> MarcarRespondidaAsync(
+            int idCotizacion,
+            CotizacionMarcarRespondidaDto dto
+        )
+        {
+            var cotizacion = await ObtenerPorIdAsync(idCotizacion);
+
+            if (cotizacion == null)
+            {
+                return false;
+            }
+
+            var archivoPdf = cotizacion.ArchivoPdf;
+
+            if (string.IsNullOrWhiteSpace(archivoPdf))
+            {
+                archivoPdf = await GenerarPdfAsync(idCotizacion);
+            }
+
+            await MarcarRespondidaSqlAsync(
+                idCotizacion,
+                dto.IdUsuarioAtencion,
+                dto.CanalEnvio,
+                archivoPdf
+            );
+
+            return true;
+        }
+
+        public async Task<CotizacionListadoDto> PrepararParaVentaAsync(int idCotizacion)
+        {
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("dbo.sp_PrepararCotizacionParaVenta", connection)
+            {
+                CommandType = CommandType.StoredProcedure
             };
 
-            _context.Venta.Add(venta);
-            await _context.SaveChangesAsync();
+            command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
 
-            foreach (var item in detalles)
+            await using var reader = await command.ExecuteReaderAsync();
+
+            CotizacionListadoDto? cotizacion = null;
+
+            if (await reader.ReadAsync())
             {
-                var detalleVenta = new DetalleVenta
+                cotizacion = MapearListado(reader);
+            }
+
+            if (cotizacion == null)
+            {
+                throw new InvalidOperationException("No se pudo preparar la cotización para venta.");
+            }
+
+            if (await reader.NextResultAsync())
+            {
+                while (await reader.ReadAsync())
                 {
-                    IdVenta = venta.IdVenta,
-                    IdElementoCatalogo = item.IdElementoCatalogo,
-                    Cantidad = item.Cantidad,
-                    PrecioUnitario = item.PrecioUnitario,
-                    Subtotal = item.Subtotal
-                };
-
-                _context.DetalleVenta.Add(detalleVenta);
+                    cotizacion.Detalles.Add(MapearDetalle(reader));
+                }
             }
 
-            var estadoConvertida = await _context.EstadoCotizacion
-                .Where(e => e.Nombre == "Convertida en venta")
-                .Select(e => e.IdEstadoCotizacion)
-                .FirstOrDefaultAsync();
-
-            if (estadoConvertida != 0)
-            {
-                cotizacion.IdEstadoCotizacion = estadoConvertida;
-            }
-
-            await _context.SaveChangesAsync();
-            await transaction.CommitAsync();
-
-            return venta.IdVenta;
+            return cotizacion;
         }
+
+        public async Task<bool> MarcarConvertidaVentaAsync(
+            int idCotizacion,
+            CotizacionConvertirVentaDto dto
+        )
+        {
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("dbo.sp_MarcarCotizacionConvertidaVenta", connection)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
+
+            command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+            command.Parameters.AddWithValue("@IdVenta", dto.IdVenta);
+            command.Parameters.AddWithValue("@IdUsuarioAtencion", ValorDb(dto.IdUsuarioAtencion));
+
+            await command.ExecuteNonQueryAsync();
+
+            return true;
+        }
+
         public async Task<int> ContarPendientesAsync()
         {
-            return await _context.Cotizacion
-                .CountAsync(c =>
-                    _context.EstadoCotizacion.Any(e =>
-                        e.IdEstadoCotizacion == c.IdEstadoCotizacion &&
-                        (
-                            e.Nombre == "Pendiente" ||
-                            e.Nombre == "En revisión"
-                        )
-                    )
-                );
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("dbo.sp_ListarCotizaciones", connection)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
+
+            command.Parameters.AddWithValue("@Buscar", DBNull.Value);
+            command.Parameters.AddWithValue("@Estado", "Pendiente");
+            command.Parameters.AddWithValue("@Origen", DBNull.Value);
+            command.Parameters.AddWithValue("@Pagina", 1);
+            command.Parameters.AddWithValue("@TamanioPagina", 1);
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            if (await reader.ReadAsync())
+            {
+                return LeerInt(reader, "TotalRegistros");
+            }
+
+            return 0;
         }
 
         public async Task<List<ClienteSelectorDto>> ListarClientesAsync()
@@ -554,7 +627,7 @@ namespace Sistema3S.Web.Services.Implementations
 
         public async Task<List<ElementoCotizableDto>> ListarElementosCotizablesAsync()
         {
-            var elementos = await (
+            return await (
                 from ec in _context.ElementoCatalogo
                 join te in _context.TipoElemento on ec.IdTipoElemento equals te.IdTipoElemento
                 where ec.Estado &&
@@ -572,8 +645,6 @@ namespace Sistema3S.Web.Services.Implementations
                     PrecioReferencial = ec.PrecioReferencial
                 }
             ).ToListAsync();
-
-            return elementos;
         }
 
         public async Task<List<EstadoCotizacionDto>> ListarEstadosAsync()
@@ -589,310 +660,361 @@ namespace Sistema3S.Web.Services.Implementations
                 .ToListAsync();
         }
 
-        private async Task RegistrarDetallesAsync(
+        private async Task MarcarRespondidaSqlAsync(
             int idCotizacion,
-            List<CotizacionDetalleCrearDto> detalles
+            int? idUsuarioAtencion,
+            string canalEnvio,
+            string? archivoPdf
         )
         {
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("dbo.sp_MarcarCotizacionRespondida", connection)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
+
+            command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+            command.Parameters.AddWithValue("@IdUsuarioAtencion", ValorDb(idUsuarioAtencion));
+            command.Parameters.AddWithValue("@CanalEnvio", canalEnvio);
+            command.Parameters.AddWithValue("@ArchivoPdf", ValorDb(archivoPdf));
+
+            await command.ExecuteNonQueryAsync();
+        }
+
+        private async Task RegistrarEnvioCorreoAsync(
+            CotizacionListadoDto cotizacion,
+            int? idUsuarioRegistro,
+            string asunto,
+            string cuerpo,
+            bool exitoso,
+            string? mensajeError
+        )
+        {
+            await using var connection = CrearConexion();
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand(@"
+                INSERT INTO EnvioCorreo (
+                    IdCotizacion,
+                    IdComprobante,
+                    IdUsuarioRegistro,
+                    Destinatario,
+                    Asunto,
+                    Cuerpo,
+                    FechaEnvio,
+                    Exitoso,
+                    MensajeError
+                )
+                VALUES (
+                    @IdCotizacion,
+                    NULL,
+                    @IdUsuarioRegistro,
+                    @Destinatario,
+                    @Asunto,
+                    @Cuerpo,
+                    GETDATE(),
+                    @Exitoso,
+                    @MensajeError
+                );
+            ", connection);
+
+            command.Parameters.AddWithValue("@IdCotizacion", cotizacion.IdCotizacion);
+            command.Parameters.AddWithValue("@IdUsuarioRegistro", ValorDb(idUsuarioRegistro));
+            command.Parameters.AddWithValue("@Destinatario", cotizacion.CorreoCliente ?? "");
+            command.Parameters.AddWithValue("@Asunto", asunto);
+            command.Parameters.AddWithValue("@Cuerpo", cuerpo);
+            command.Parameters.AddWithValue("@Exitoso", exitoso);
+            command.Parameters.AddWithValue("@MensajeError", ValorDb(mensajeError));
+
+            await command.ExecuteNonQueryAsync();
+        }
+
+        private async Task<string?> ObtenerNombreEstadoAsync(int idEstadoCotizacion)
+        {
+            return await _context.EstadoCotizacion
+                .Where(e => e.IdEstadoCotizacion == idEstadoCotizacion && e.Estado)
+                .Select(e => e.Nombre)
+                .FirstOrDefaultAsync();
+        }
+
+        private SqlConnection CrearConexion()
+        {
+            var connectionString = _context.Database.GetConnectionString();
+
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                throw new InvalidOperationException("No se encontró la cadena de conexión.");
+            }
+
+            return new SqlConnection(connectionString);
+        }
+
+        private static DataTable CrearTablaDetalles(List<CotizacionDetalleCrearDto> detalles)
+        {
+            var table = new DataTable();
+
+            table.Columns.Add("IdElementoCatalogo", typeof(int));
+            table.Columns.Add("Cantidad", typeof(int));
+            table.Columns.Add("PrecioUnitario", typeof(decimal));
+            table.Columns.Add("Observacion", typeof(string));
+
             foreach (var item in detalles)
             {
-                var subtotal = Math.Round(item.Cantidad * item.PrecioUnitario, 2);
-
-                var detalle = new DetalleCotizacion
-                {
-                    IdCotizacion = idCotizacion,
-                    IdElementoCatalogo = item.IdElementoCatalogo,
-                    Cantidad = item.Cantidad,
-                    PrecioUnitario = item.PrecioUnitario,
-                    Subtotal = subtotal,
-                    Observacion = NormalizarTexto(item.Observacion)
-                };
-
-                _context.DetalleCotizacion.Add(detalle);
+                table.Rows.Add(
+                    item.IdElementoCatalogo,
+                    item.Cantidad,
+                    item.PrecioUnitario,
+                    string.IsNullOrWhiteSpace(item.Observacion) ? DBNull.Value : item.Observacion.Trim()
+                );
             }
 
-            await _context.SaveChangesAsync();
+            return table;
         }
 
-        private async Task RecalcularTotalesAsync(Cotizacion cotizacion, decimal descuento)
+        private static CotizacionListadoDto MapearListado(SqlDataReader reader)
         {
-            var subtotalConIgv = await _context.DetalleCotizacion
-                .Where(d => d.IdCotizacion == cotizacion.IdCotizacion)
-                .SumAsync(d => d.Subtotal);
-
-            subtotalConIgv = Math.Round(subtotalConIgv, 2);
-
-            if (descuento < 0)
+            return new CotizacionListadoDto
             {
-                descuento = 0;
-            }
+                IdCotizacion = LeerInt(reader, "IdCotizacion"),
+                CodigoCotizacion = LeerString(reader, "CodigoCotizacion"),
 
-            if (descuento > subtotalConIgv)
-            {
-                descuento = subtotalConIgv;
-            }
+                IdCliente = LeerInt(reader, "IdCliente"),
+                Cliente = LeerString(reader, "Cliente"),
+                TipoDocumentoCliente = LeerString(reader, "TipoDocumentoCliente"),
+                DocumentoCliente = LeerString(reader, "DocumentoCliente"),
+                TipoCliente = LeerString(reader, "TipoCliente"),
 
-            descuento = Math.Round(descuento, 2);
+                CorreoCliente = LeerStringNullable(reader, "CorreoCliente"),
+                TelefonoCliente = LeerStringNullable(reader, "TelefonoCliente"),
+                DireccionCliente = LeerStringNullable(reader, "DireccionCliente"),
 
-            var total = Math.Round(subtotalConIgv - descuento, 2);
-            var valorVenta = Math.Round(total / 1.18m, 2);
-            var igvIncluido = Math.Round(total - valorVenta, 2);
+                IdUsuarioRegistro = LeerIntNullable(reader, "IdUsuarioRegistro"),
+                IdUsuarioAtencion = LeerIntNullable(reader, "IdUsuarioAtencion"),
 
-            cotizacion.Subtotal = subtotalConIgv;
-            cotizacion.Descuento = descuento;
-            cotizacion.Igv = igvIncluido;
-            cotizacion.Total = total;
-            cotizacion.TotalReferencial = total;
-        }
+                IdEstadoCotizacion = LeerInt(reader, "IdEstadoCotizacion"),
+                EstadoCotizacion = LeerString(reader, "EstadoCotizacion"),
 
-        private async Task ValidarCrearActualizarAsync(
-            int idCliente,
-            int idEstadoCotizacion,
-            string origenCotizacion,
-            decimal descuento,
-            List<CotizacionDetalleCrearDto> detalles
-        )
-        {
-            var existeCliente = await _context.Cliente
-                .AnyAsync(c => c.IdCliente == idCliente && c.Estado);
+                OrigenCotizacion = LeerString(reader, "OrigenCotizacion"),
 
-            if (!existeCliente)
-            {
-                throw new InvalidOperationException("Selecciona un cliente válido.");
-            }
+                FechaCotizacion = LeerDateTime(reader, "FechaCotizacion"),
+                FechaRespuesta = LeerDateTimeNullable(reader, "FechaRespuesta"),
+                CanalRespuesta = LeerStringNullable(reader, "CanalRespuesta"),
 
-            var existeEstado = await _context.EstadoCotizacion
-                .AnyAsync(e => e.IdEstadoCotizacion == idEstadoCotizacion && e.Estado);
+                Subtotal = LeerDecimal(reader, "Subtotal"),
+                Descuento = LeerDecimal(reader, "Descuento"),
+                Igv = LeerDecimal(reader, "Igv"),
+                Total = LeerDecimal(reader, "Total"),
+                TotalReferencial = LeerDecimal(reader, "TotalReferencial"),
 
-            if (!existeEstado)
-            {
-                throw new InvalidOperationException("Selecciona un estado de cotización válido.");
-            }
+                Observacion = LeerStringNullable(reader, "Observacion"),
+                ArchivoPdf = LeerStringNullable(reader, "ArchivoPdf"),
 
-            var origen = NormalizarOrigen(origenCotizacion);
+                CorreoEnviado = LeerBool(reader, "CorreoEnviado"),
+                WhatsappEnviado = LeerBool(reader, "WhatsappEnviado"),
+                PdfGenerado = LeerBool(reader, "PdfGenerado"),
 
-            var origenValido =
-                origen == "Manual" ||
-                origen == "Web" ||
-                origen == "WhatsApp" ||
-                origen == "Correo";
+                CantidadDetalles = LeerInt(reader, "CantidadDetalles"),
 
-            if (!origenValido)
-            {
-                throw new InvalidOperationException("El origen de la cotización no es válido.");
-            }
+                IdVentaGenerada = LeerIntNullable(reader, "IdVentaGenerada"),
+                IdVentaAsociada = LeerIntNullable(reader, "IdVentaAsociada"),
 
-            if (descuento < 0)
-            {
-                throw new InvalidOperationException("El descuento no puede ser negativo.");
-            }
-
-            if (detalles == null || detalles.Count == 0)
-            {
-                throw new InvalidOperationException("Agrega al menos un producto o servicio a la cotización.");
-            }
-
-            decimal subtotalTemporal = 0;
-
-            foreach (var detalle in detalles)
-            {
-                if (detalle.IdElementoCatalogo <= 0)
-                {
-                    throw new InvalidOperationException("Selecciona un producto o servicio válido.");
-                }
-
-                if (detalle.Cantidad <= 0)
-                {
-                    throw new InvalidOperationException("La cantidad debe ser mayor que cero.");
-                }
-
-                if (detalle.PrecioUnitario < 0)
-                {
-                    throw new InvalidOperationException("El precio unitario no puede ser negativo.");
-                }
-
-                var existeElemento = await _context.ElementoCatalogo
-                    .AnyAsync(e => e.IdElementoCatalogo == detalle.IdElementoCatalogo && e.Estado);
-
-                if (!existeElemento)
-                {
-                    throw new InvalidOperationException("Uno de los productos o servicios seleccionados no está activo.");
-                }
-
-                subtotalTemporal += detalle.Cantidad * detalle.PrecioUnitario;
-            }
-
-            if (descuento > subtotalTemporal)
-            {
-                throw new InvalidOperationException("El descuento no puede ser mayor al subtotal.");
-            }
-        }
-
-        private async Task<CotizacionListadoDto> MapearCotizacionAsync(
-            Cotizacion cotizacion,
-            bool incluirDetalles
-        )
-        {
-            var cliente = await ObtenerClienteAsync(cotizacion.IdCliente);
-
-            var estado = await _context.EstadoCotizacion
-                .Where(e => e.IdEstadoCotizacion == cotizacion.IdEstadoCotizacion)
-                .Select(e => e.Nombre)
-                .FirstOrDefaultAsync() ?? "Sin estado";
-
-            var cantidadDetalles = await _context.DetalleCotizacion
-                .CountAsync(d => d.IdCotizacion == cotizacion.IdCotizacion);
-
-            var dto = new CotizacionListadoDto
-            {
-                IdCotizacion = cotizacion.IdCotizacion,
-
-                IdCliente = cotizacion.IdCliente,
-                Cliente = cliente.Cliente,
-                DocumentoCliente = $"{cliente.TipoDocumento} {cliente.NumeroDocumento}",
-                TipoCliente = cliente.TipoCliente,
-
-                IdEstadoCotizacion = cotizacion.IdEstadoCotizacion,
-                EstadoCotizacion = estado,
-
-                OrigenCotizacion = cotizacion.OrigenCotizacion,
-
-                FechaCotizacion = cotizacion.FechaCotizacion,
-
-                Subtotal = cotizacion.Subtotal,
-                Descuento = cotizacion.Descuento,
-                Igv = cotizacion.Igv,
-                Total = cotizacion.Total,
-
-                TotalReferencial = cotizacion.TotalReferencial,
-
-                Observacion = cotizacion.Observacion,
-                ArchivoPdf = cotizacion.ArchivoPdf,
-                CorreoEnviado = cotizacion.CorreoEnviado,
-
-                CantidadDetalles = cantidadDetalles
-            };
-
-            if (incluirDetalles)
-            {
-                dto.Detalles = await ListarDetallesAsync(cotizacion.IdCotizacion);
-            }
-
-            return dto;
-        }
-
-        private async Task<List<CotizacionDetalleDto>> ListarDetallesAsync(int idCotizacion)
-        {
-            return await (
-                from d in _context.DetalleCotizacion
-                join ec in _context.ElementoCatalogo on d.IdElementoCatalogo equals ec.IdElementoCatalogo
-                join te in _context.TipoElemento on ec.IdTipoElemento equals te.IdTipoElemento
-                where d.IdCotizacion == idCotizacion
-                orderby d.IdDetalleCotizacion
-                select new CotizacionDetalleDto
-                {
-                    IdDetalleCotizacion = d.IdDetalleCotizacion,
-                    IdElementoCatalogo = d.IdElementoCatalogo,
-                    ElementoNombre = ec.Nombre,
-                    TipoElemento = te.Nombre,
-                    Cantidad = d.Cantidad,
-                    PrecioUnitario = d.PrecioUnitario,
-                    Subtotal = d.Subtotal,
-                    Observacion = d.Observacion
-                }
-            ).ToListAsync();
-        }
-
-        private async Task<ClienteSelectorDto> ObtenerClienteAsync(int idCliente)
-        {
-            var natural = await (
-                from c in _context.Cliente
-                join tc in _context.TipoCliente on c.IdTipoCliente equals tc.IdTipoCliente
-                join td in _context.TipoDocumento on c.IdTipoDocumento equals td.IdTipoDocumento
-                join pn in _context.ClientePersonaNatural on c.IdCliente equals pn.IdCliente
-                where c.IdCliente == idCliente
-                select new ClienteSelectorDto
-                {
-                    IdCliente = c.IdCliente,
-                    Cliente = pn.Nombres + " " + pn.ApellidoPaterno + " " + (pn.ApellidoMaterno ?? ""),
-                    TipoCliente = tc.Nombre,
-                    TipoDocumento = td.Nombre,
-                    NumeroDocumento = c.NumeroDocumento
-                }
-            ).FirstOrDefaultAsync();
-
-            if (natural != null)
-            {
-                return natural;
-            }
-
-            var empresa = await (
-                from c in _context.Cliente
-                join tc in _context.TipoCliente on c.IdTipoCliente equals tc.IdTipoCliente
-                join td in _context.TipoDocumento on c.IdTipoDocumento equals td.IdTipoDocumento
-                join ce in _context.ClienteEmpresa on c.IdCliente equals ce.IdCliente
-                where c.IdCliente == idCliente
-                select new ClienteSelectorDto
-                {
-                    IdCliente = c.IdCliente,
-                    Cliente = ce.RazonSocial,
-                    TipoCliente = tc.Nombre,
-                    TipoDocumento = td.Nombre,
-                    NumeroDocumento = c.NumeroDocumento
-                }
-            ).FirstOrDefaultAsync();
-
-            return empresa ?? new ClienteSelectorDto
-            {
-                IdCliente = idCliente,
-                Cliente = "Cliente no encontrado",
-                TipoCliente = "Sin tipo",
-                TipoDocumento = "Doc.",
-                NumeroDocumento = "-"
+                PuedeConvertirVenta = LeerBool(reader, "PuedeConvertirVenta"),
+                PuedeGestionar = LeerBool(reader, "PuedeGestionar")
             };
         }
 
-        private static string? NormalizarTexto(string? valor)
+        private static CotizacionDetalleDto MapearDetalle(SqlDataReader reader)
         {
-            if (string.IsNullOrWhiteSpace(valor))
+            var elemento = LeerString(reader, "Elemento");
+
+            return new CotizacionDetalleDto
+            {
+                IdDetalleCotizacion = LeerInt(reader, "IdDetalleCotizacion"),
+                IdCotizacion = LeerInt(reader, "IdCotizacion"),
+                IdElementoCatalogo = LeerInt(reader, "IdElementoCatalogo"),
+
+                Elemento = elemento,
+                ElementoNombre = elemento,
+                TipoElemento = LeerString(reader, "TipoElemento"),
+
+                IdProducto = LeerIntNullable(reader, "IdProducto"),
+                CodigoProducto = LeerStringNullable(reader, "CodigoProducto"),
+
+                IdServicio = LeerIntNullable(reader, "IdServicio"),
+
+                Codigo = LeerString(reader, "Codigo"),
+
+                Cantidad = LeerInt(reader, "Cantidad"),
+                PrecioUnitario = LeerDecimal(reader, "PrecioUnitario"),
+                Subtotal = LeerDecimal(reader, "Subtotal"),
+
+                Observacion = LeerStringNullable(reader, "Observacion")
+            };
+        }
+
+        private string ObtenerRutaFisicaArchivo(string? rutaRelativa)
+        {
+            if (string.IsNullOrWhiteSpace(rutaRelativa))
+            {
+                return string.Empty;
+            }
+
+            var webRoot = _environment.WebRootPath ??
+                          Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+
+            var rutaLimpia = rutaRelativa
+                .TrimStart('/')
+                .Replace("/", Path.DirectorySeparatorChar.ToString());
+
+            return Path.Combine(webRoot, rutaLimpia);
+        }
+
+        private string ObtenerBaseUrlPublica()
+        {
+            var baseUrl = _configuration["App:PublicBaseUrl"];
+
+            if (string.IsNullOrWhiteSpace(baseUrl))
+            {
+                baseUrl = "https://3s-omega.vercel.app";
+            }
+
+            return baseUrl.TrimEnd('/');
+        }
+
+        private static object ValorDb(string? valor)
+        {
+            return string.IsNullOrWhiteSpace(valor) ? DBNull.Value : valor.Trim();
+        }
+
+        private static object ValorDb(int? valor)
+        {
+            return valor.HasValue ? valor.Value : DBNull.Value;
+        }
+
+        private static bool ExisteColumna(SqlDataReader reader, string nombre)
+        {
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                if (reader.GetName(i).Equals(nombre, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string LeerString(SqlDataReader reader, string nombre)
+        {
+            if (!ExisteColumna(reader, nombre))
+            {
+                return string.Empty;
+            }
+
+            var ordinal = reader.GetOrdinal(nombre);
+
+            return reader.IsDBNull(ordinal) ? string.Empty : Convert.ToString(reader.GetValue(ordinal)) ?? string.Empty;
+        }
+
+        private static string? LeerStringNullable(SqlDataReader reader, string nombre)
+        {
+            if (!ExisteColumna(reader, nombre))
             {
                 return null;
             }
 
-            return valor.Trim();
+            var ordinal = reader.GetOrdinal(nombre);
+
+            return reader.IsDBNull(ordinal) ? null : Convert.ToString(reader.GetValue(ordinal));
         }
 
-        private static string NormalizarOrigen(string? valor)
+        private static int LeerInt(SqlDataReader reader, string nombre)
         {
-            if (string.IsNullOrWhiteSpace(valor))
+            if (!ExisteColumna(reader, nombre))
             {
-                return "Manual";
+                return 0;
             }
 
-            var origen = valor.Trim();
+            var ordinal = reader.GetOrdinal(nombre);
 
-            if (origen.Equals("web", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Web";
-            }
-
-            if (origen.Equals("whatsapp", StringComparison.OrdinalIgnoreCase))
-            {
-                return "WhatsApp";
-            }
-
-            if (origen.Equals("correo", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Correo";
-            }
-
-            return "Manual";
+            return reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal));
         }
-        
+        private static string CrearMensajeWhatsAppCliente(CotizacionListadoDto cotizacion)
+        {
+            return
+        $@"Hola, le saludamos de Empresa 3S.
 
-       
+Le enviamos su cotización {cotizacion.CodigoCotizacion} por la venta de productos y/o servicios solicitados.
 
-        private string LimpiarTelefonoWhatsApp(string telefono)
+Total referencial: S/ {cotizacion.Total:0.00}
+
+Adjuntamos el PDF de la cotización para su revisión.
+
+Quedamos atentos a su confirmación.";
+        }
+        private static int? LeerIntNullable(SqlDataReader reader, string nombre)
+        {
+            if (!ExisteColumna(reader, nombre))
+            {
+                return null;
+            }
+
+            var ordinal = reader.GetOrdinal(nombre);
+
+            return reader.IsDBNull(ordinal) ? null : Convert.ToInt32(reader.GetValue(ordinal));
+        }
+
+        private static decimal LeerDecimal(SqlDataReader reader, string nombre)
+        {
+            if (!ExisteColumna(reader, nombre))
+            {
+                return 0;
+            }
+
+            var ordinal = reader.GetOrdinal(nombre);
+
+            return reader.IsDBNull(ordinal) ? 0 : Convert.ToDecimal(reader.GetValue(ordinal));
+        }
+
+        private static bool LeerBool(SqlDataReader reader, string nombre)
+        {
+            if (!ExisteColumna(reader, nombre))
+            {
+                return false;
+            }
+
+            var ordinal = reader.GetOrdinal(nombre);
+
+            return !reader.IsDBNull(ordinal) && Convert.ToBoolean(reader.GetValue(ordinal));
+        }
+
+        private static DateTime LeerDateTime(SqlDataReader reader, string nombre)
+        {
+            if (!ExisteColumna(reader, nombre))
+            {
+                return DateTime.MinValue;
+            }
+
+            var ordinal = reader.GetOrdinal(nombre);
+
+            return reader.IsDBNull(ordinal) ? DateTime.MinValue : Convert.ToDateTime(reader.GetValue(ordinal));
+        }
+
+        private static DateTime? LeerDateTimeNullable(SqlDataReader reader, string nombre)
+        {
+            if (!ExisteColumna(reader, nombre))
+            {
+                return null;
+            }
+
+            var ordinal = reader.GetOrdinal(nombre);
+
+            return reader.IsDBNull(ordinal) ? null : Convert.ToDateTime(reader.GetValue(ordinal));
+        }
+
+        private static string LimpiarTelefonoWhatsApp(string telefono)
         {
             var limpio = new string(
                 telefono.Where(char.IsDigit).ToArray()

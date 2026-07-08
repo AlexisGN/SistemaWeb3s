@@ -24,5 +24,21 @@
         public string? ObservacionPago { get; set; }
 
         public List<CompraDetalleCrearDto> Detalles { get; set; } = new();
+
+        // NUEVO:
+        // Cronograma editable de cuotas.
+        // Si viene vacío, el procedure usará la lógica anterior:
+        // generar fechas mensuales desde FechaPrimerVencimiento.
+        public List<CuotaCompraCrearDto> Cuotas { get; set; } = new();
+    }
+
+    public class CuotaCompraCrearDto
+    {
+        public int NumeroCuota { get; set; }
+        public DateTime? FechaVencimiento { get; set; }
+
+        // Este monto sirve para mostrar/validar en frontend.
+        // El SQL calculará los montos reales para evitar descuadres.
+        public decimal MontoCuota { get; set; }
     }
 }

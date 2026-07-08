@@ -1,9 +1,13 @@
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using QuestPDF.Infrastructure;
 using Sistema3S.Web.Data;
 using Sistema3S.Web.Services.Implementations;
 using Sistema3S.Web.Services.Interfaces;
 using Sistema3S.Web.Services.Pdf;
+using Sistema3S.Web.Services.Seguridad;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,23 +22,80 @@ builder.Services.AddDbContext<Bd3sContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("BD_3S"))
 );
 
+// Configuración JWT
+var jwtKey = builder.Configuration["Jwt:Key"];
+
+if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
+{
+    throw new InvalidOperationException("La clave JWT no está configurada correctamente.");
+}
+
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "Sistema3S";
+var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "Sistema3SAdmin";
+
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.RequireHttpsMetadata = false;
+        options.SaveToken = false;
+
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwtIssuer,
+
+            ValidateAudience = true,
+            ValidAudience = jwtAudience,
+
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromMinutes(2)
+        };
+    });
+
+// Servicios de seguridad / autenticación
+builder.Services.AddScoped<PasswordHashService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
+
 // Servicios de negocio
 builder.Services.AddScoped<IProductoService, ProductoService>();
 builder.Services.AddScoped<IServicioService, ServicioService>();
 builder.Services.AddScoped<ICotizacionService, CotizacionService>();
 builder.Services.AddScoped<IClienteService, ClienteService>();
+
 builder.Services.AddHttpClient<IConsultaDocumentoService, ConsultaDocumentoService>();
 builder.Services.AddHttpClient<IProveedorService, ProveedorService>();
+
 builder.Services.AddScoped<IInventarioService, InventarioService>();
+
 builder.Services.AddScoped<ICompraService, CompraService>();
 builder.Services.AddScoped<IPdfCompraService, PdfCompraService>();
+builder.Services.AddScoped<IExcelCompraService, ExcelCompraService>();
+
 builder.Services.AddScoped<IVentaService, VentaService>();
 builder.Services.AddScoped<IPdfVentaService, PdfVentaService>();
 builder.Services.AddScoped<IExcelVentaService, ExcelVentaService>();
 
-// Servicios para PDF
+builder.Services.AddScoped<ICajaService, CajaService>();
+
+builder.Services.AddScoped<PasswordHashService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IRolService, RolService>();
+builder.Services.AddScoped<IUsuarioService, UsuarioService>();
+
+// Servicios para PDF / correo / WhatsApp
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IPdfCotizacionService, PdfCotizacionService>();
+builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<IWhatsAppService, WhatsAppService>();
 
 // CORS para Angular
 builder.Services.AddCors(options =>
@@ -64,6 +125,9 @@ app.UseStaticFiles();
 app.UseRouting();
 
 app.UseCors("AngularPolicy");
+
+// Primero autenticación, luego autorización
+app.UseAuthentication();
 
 app.UseAuthorization();
 

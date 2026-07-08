@@ -16,9 +16,17 @@ namespace Sistema3S.Web.Services.Interfaces
             int tamanioPagina
         );
 
-        Task<CompraRegistroResultadoDto> RegistrarPagoAsync(PagoCompraCrearDto dto);
         Task<CompraDetalleCompletoDto?> ObtenerDetalleAsync(int idCompra);
 
+        Task<CompraRegistroResultadoDto> RegistrarPagoAsync(PagoCompraCrearDto dto);
+
         Task<bool> AnularAsync(int idCompra, AnularCompraDto dto);
+
+        Task<List<ReporteCompraDto>> ObtenerReporteAsync(
+            string? buscar,
+            string? estadoPago,
+            DateTime? fechaInicio,
+            DateTime? fechaFin
+        );
     }
 }

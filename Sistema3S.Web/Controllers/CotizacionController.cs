@@ -18,12 +18,16 @@ namespace Sistema3S.Web.Controllers
         [HttpGet]
         public async Task<IActionResult> Listar(
             [FromQuery] string? buscar,
+            [FromQuery] string? estado,
+            [FromQuery] string? origen,
             [FromQuery] int pagina = 1,
-            [FromQuery] int tamanioPagina = 5
+            [FromQuery] int tamanioPagina = 8
         )
         {
             var resultado = await _cotizacionService.ListarAsync(
                 buscar,
+                estado,
+                origen,
                 pagina,
                 tamanioPagina
             );
@@ -34,17 +38,34 @@ namespace Sistema3S.Web.Controllers
         [HttpGet("{idCotizacion:int}")]
         public async Task<IActionResult> ObtenerPorId(int idCotizacion)
         {
-            var cotizacion = await _cotizacionService.ObtenerPorIdAsync(idCotizacion);
-
-            if (cotizacion == null)
+            try
             {
-                return NotFound(new
+                var cotizacion = await _cotizacionService.ObtenerPorIdAsync(idCotizacion);
+
+                if (cotizacion == null)
                 {
-                    mensaje = "Cotización no encontrada."
+                    return NotFound(new
+                    {
+                        mensaje = "Cotización no encontrada."
+                    });
+                }
+
+                return Ok(cotizacion);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
                 });
             }
-
-            return Ok(cotizacion);
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo obtener la cotización."
+                });
+            }
         }
 
         [HttpPost]
@@ -67,32 +88,7 @@ namespace Sistema3S.Web.Controllers
                     mensaje = ex.Message
                 });
             }
-        }
-
-        [HttpPut("{idCotizacion:int}")]
-        public async Task<IActionResult> Actualizar(
-            int idCotizacion,
-            [FromBody] CotizacionActualizarDto dto
-        )
-        {
-            try
-            {
-                var actualizado = await _cotizacionService.ActualizarAsync(idCotizacion, dto);
-
-                if (!actualizado)
-                {
-                    return NotFound(new
-                    {
-                        mensaje = "Cotización no encontrada."
-                    });
-                }
-
-                return Ok(new
-                {
-                    mensaje = "Cotización actualizada correctamente."
-                });
-            }
-            catch (InvalidOperationException ex)
+            catch (Exception ex)
             {
                 return BadRequest(new
                 {
@@ -102,11 +98,17 @@ namespace Sistema3S.Web.Controllers
         }
 
         [HttpPut("{idCotizacion:int}/cancelar")]
-        public async Task<IActionResult> Cancelar(int idCotizacion)
+        public async Task<IActionResult> Cancelar(
+            int idCotizacion,
+            [FromBody] CotizacionCambiarEstadoDto? dto
+        )
         {
             try
             {
-                var cancelada = await _cotizacionService.CancelarAsync(idCotizacion);
+                var cancelada = await _cotizacionService.CancelarAsync(
+                    idCotizacion,
+                    dto?.IdUsuarioAtencion
+                );
 
                 if (!cancelada)
                 {
@@ -128,6 +130,13 @@ namespace Sistema3S.Web.Controllers
                     mensaje = ex.Message
                 });
             }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
         }
 
         [HttpPut("{idCotizacion:int}/estado")]
@@ -140,7 +149,7 @@ namespace Sistema3S.Web.Controllers
             {
                 var actualizado = await _cotizacionService.CambiarEstadoAsync(
                     idCotizacion,
-                    dto.IdEstadoCotizacion
+                    dto
                 );
 
                 if (!actualizado)
@@ -157,6 +166,13 @@ namespace Sistema3S.Web.Controllers
                 });
             }
             catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+            catch (Exception ex)
             {
                 return BadRequest(new
                 {
@@ -185,16 +201,29 @@ namespace Sistema3S.Web.Controllers
                     mensaje = ex.Message
                 });
             }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
         }
 
-        [HttpPut("{idCotizacion:int}/marcar-correo-enviado")]
-        public async Task<IActionResult> MarcarCorreoEnviado(int idCotizacion)
+        [HttpPost("{idCotizacion:int}/enviar-correo")]
+        public async Task<IActionResult> EnviarCorreo(
+            int idCotizacion,
+            [FromBody] CotizacionEnviarDto? dto
+        )
         {
             try
             {
-                var actualizado = await _cotizacionService.MarcarCorreoEnviadoAsync(idCotizacion);
+                var enviado = await _cotizacionService.EnviarCorreoAsync(
+                    idCotizacion,
+                    dto?.IdUsuarioAtencion
+                );
 
-                if (!actualizado)
+                if (!enviado)
                 {
                     return NotFound(new
                     {
@@ -204,7 +233,7 @@ namespace Sistema3S.Web.Controllers
 
                 return Ok(new
                 {
-                    mensaje = "Cotización marcada como enviada por correo."
+                    mensaje = "Cotización enviada por correo correctamente."
                 });
             }
             catch (InvalidOperationException ex)
@@ -214,8 +243,50 @@ namespace Sistema3S.Web.Controllers
                     mensaje = ex.Message
                 });
             }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
         }
+        [HttpPost("{idCotizacion:int}/enviar-whatsapp")]
+        public async Task<IActionResult> EnviarWhatsApp(
+    int idCotizacion,
+    [FromBody] CotizacionEnviarDto? dto
+)
+        {
+            try
+            {
+                var resultado = await _cotizacionService.EnviarWhatsAppAsync(
+                    idCotizacion,
+                    dto?.IdUsuarioAtencion
+                );
 
+                return Ok(new
+                {
+                    mensaje = resultado.RequiereConfirmacionRespondida
+                        ? "Mensaje de WhatsApp preparado correctamente. Adjunta el PDF manualmente y confirma el envío."
+                        : "Cotización enviada por WhatsApp correctamente.",
+                    resultado
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+        }
         [HttpGet("{idCotizacion:int}/whatsapp")]
         public async Task<IActionResult> ObtenerWhatsApp(int idCotizacion)
         {
@@ -232,28 +303,116 @@ namespace Sistema3S.Web.Controllers
                     mensaje = ex.Message
                 });
             }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
         }
 
-        [HttpPost("{idCotizacion:int}/convertir-venta")]
-        public async Task<IActionResult> ConvertirEnVenta(
+        [HttpPut("{idCotizacion:int}/marcar-respondida")]
+        public async Task<IActionResult> MarcarRespondida(
+            int idCotizacion,
+            [FromBody] CotizacionMarcarRespondidaDto dto
+        )
+        {
+            try
+            {
+                var actualizado = await _cotizacionService.MarcarRespondidaAsync(
+                    idCotizacion,
+                    dto
+                );
+
+                if (!actualizado)
+                {
+                    return NotFound(new
+                    {
+                        mensaje = "Cotización no encontrada."
+                    });
+                }
+
+                return Ok(new
+                {
+                    mensaje = "Cotización marcada como respondida correctamente."
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+        }
+
+        [HttpGet("{idCotizacion:int}/preparar-venta")]
+        public async Task<IActionResult> PrepararParaVenta(int idCotizacion)
+        {
+            try
+            {
+                var cotizacion = await _cotizacionService.PrepararParaVentaAsync(idCotizacion);
+
+                return Ok(cotizacion);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+        }
+
+        [HttpPut("{idCotizacion:int}/marcar-convertida-venta")]
+        public async Task<IActionResult> MarcarConvertidaVenta(
             int idCotizacion,
             [FromBody] CotizacionConvertirVentaDto dto
         )
         {
             try
             {
-                var idVenta = await _cotizacionService.ConvertirEnVentaAsync(
+                var actualizado = await _cotizacionService.MarcarConvertidaVentaAsync(
                     idCotizacion,
-                    dto.IdUsuarioRegistro
+                    dto
                 );
+
+                if (!actualizado)
+                {
+                    return NotFound(new
+                    {
+                        mensaje = "Cotización no encontrada."
+                    });
+                }
 
                 return Ok(new
                 {
-                    mensaje = "Cotización convertida en venta correctamente.",
-                    idVenta
+                    mensaje = "Cotización marcada como convertida en venta correctamente."
                 });
             }
             catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    mensaje = ex.Message
+                });
+            }
+            catch (Exception ex)
             {
                 return BadRequest(new
                 {

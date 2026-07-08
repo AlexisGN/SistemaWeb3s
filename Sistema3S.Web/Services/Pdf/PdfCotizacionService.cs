@@ -67,6 +67,17 @@ namespace Sistema3S.Web.Services.Pdf
                         {
                             column.Spacing(12);
 
+                            column.Item()
+                                .Text("COTIZACIÓN COMERCIAL")
+                                .FontSize(17)
+                                .Bold()
+                                .FontColor(ColorRojo);
+
+                            column.Item()
+                                .Text("Propuesta comercial emitida para evaluación y aprobación del cliente.")
+                                .FontSize(9)
+                                .FontColor(ColorSecundario);
+
                             column.Item().Element(container => ComponerDatosCliente(container, modelo));
                             column.Item().Element(container => ComponerDetalle(container, modelo));
                             column.Item().Element(container => ComponerResumen(container, modelo));
@@ -126,8 +137,12 @@ namespace Sistema3S.Web.Services.Pdf
             empresa ??= new EmpresaPdfModel
             {
                 NombreComercial = "3S",
-                RazonSocial = "3S - Servicios y Soluciones Superiores",
-                Rubro = "Ingeniería y soluciones para la industria"
+                RazonSocial = "3S (SERVICIO Y SOLUCIONES SUPERIORES S.A.C.)",
+                Rubro = "Ingeniería y soluciones para la industria",
+                Correo = "cevallosindustrial@gmail.com",
+                Telefono = "+51 948 327 667",
+                SitioWeb = "https://3s-omega.vercel.app/",
+                Direccion = "Av. Los Pinos 960 Urb. El Ermitaño, Independencia - Lima - Lima"
             };
 
             var cliente = await ObtenerClienteAsync(cotizacion.IdCliente);
@@ -242,7 +257,7 @@ namespace Sistema3S.Web.Services.Pdf
         {
             var nombreEmpresa = !string.IsNullOrWhiteSpace(modelo.Empresa.RazonSocial)
                 ? modelo.Empresa.RazonSocial
-                : "3S - Servicios y Soluciones Superiores";
+                : "3S (SERVICIO Y SOLUCIONES SUPERIORES S.A.C.)";
 
             var contactos = new List<string>();
 
@@ -336,6 +351,13 @@ namespace Sistema3S.Web.Services.Pdf
                                 .Text($"Fecha: {modelo.FechaCotizacion:dd/MM/yyyy}")
                                 .FontSize(9)
                                 .FontColor(ColorSecundario);
+
+                            column.Item()
+                                .AlignRight()
+                                .Text($"Estado: {modelo.EstadoCotizacion}")
+                                .FontSize(8)
+                                .Bold()
+                                .FontColor(ColorRojo);
                         });
                     });
 
@@ -425,7 +447,7 @@ namespace Sistema3S.Web.Services.Pdf
                 column.Spacing(8);
 
                 column.Item()
-                    .Text("DETALLE DE COTIZACIÓN")
+                    .Text("DETALLE DE PRODUCTOS Y/O SERVICIOS COTIZADOS")
                     .FontSize(11)
                     .Bold()
                     .FontColor(ColorNegro);
@@ -463,7 +485,7 @@ namespace Sistema3S.Web.Services.Pdf
 
                             if (!string.IsNullOrWhiteSpace(item.Observacion))
                             {
-                                c.Item().Text($"Obs.: {item.Observacion}").FontSize(7).FontColor(ColorSecundario);
+                                c.Item().Text($"Observación: {item.Observacion}").FontSize(7).FontColor(ColorSecundario);
                             }
                         });
 
@@ -498,12 +520,17 @@ namespace Sistema3S.Web.Services.Pdf
                             .FontColor(ColorNegro);
 
                         column.Item()
-                            .Text("Los precios indicados incluyen IGV y pueden estar sujetos a validación técnica, disponibilidad de stock o visita de evaluación.")
+                            .Text("Los precios indicados incluyen IGV. La propuesta queda sujeta a disponibilidad de stock, validación técnica o visita de evaluación cuando corresponda.")
                             .FontSize(8)
                             .FontColor(ColorSecundario);
 
                         column.Item()
                             .Text("La cotización tiene una vigencia referencial de 7 días calendario, salvo acuerdo distinto con el cliente.")
+                            .FontSize(8)
+                            .FontColor(ColorSecundario);
+
+                        column.Item()
+                            .Text("Esta cotización no representa comprobante de pago. La venta se formalizará con el comprobante correspondiente una vez aprobada la propuesta.")
                             .FontSize(8)
                             .FontColor(ColorSecundario);
                     });
@@ -532,7 +559,7 @@ namespace Sistema3S.Web.Services.Pdf
 
                         column.Item().Background(ColorNegro).Padding(9).Row(totalRow =>
                         {
-                            totalRow.RelativeItem().Text("TOTAL").FontColor(Colors.White).Bold().FontSize(11);
+                            totalRow.RelativeItem().Text("TOTAL REFERENCIAL").FontColor(Colors.White).Bold().FontSize(10);
                             totalRow.AutoItem().Text($"S/ {modelo.Total:0.00}").FontColor(Colors.White).Bold().FontSize(13);
                         });
                     });
@@ -550,7 +577,7 @@ namespace Sistema3S.Web.Services.Pdf
                     column.Spacing(5);
 
                     column.Item()
-                        .Text("OBSERVACIONES")
+                        .Text("OBSERVACIONES PARA EL CLIENTE")
                         .FontSize(10)
                         .Bold()
                         .FontColor(ColorNegro);
@@ -575,7 +602,7 @@ namespace Sistema3S.Web.Services.Pdf
                     column.Item().PaddingTop(6).Row(row =>
                     {
                         row.RelativeItem()
-                            .Text("Documento generado automáticamente por el Sistema Web 3S.")
+                            .Text("Documento emitido por Empresa 3S como propuesta comercial para evaluación del cliente.")
                             .FontSize(8)
                             .FontColor(ColorSecundario);
 

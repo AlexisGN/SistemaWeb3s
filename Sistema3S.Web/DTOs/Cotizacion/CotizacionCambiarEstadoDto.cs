@@ -2,6 +2,8 @@
 {
     public class CotizacionCambiarEstadoDto
     {
-        public int IdEstadoCotizacion { get; set; }
+        public int? IdEstadoCotizacion { get; set; }
+        public string? NuevoEstado { get; set; }
+        public int? IdUsuarioAtencion { get; set; }
     }
 }

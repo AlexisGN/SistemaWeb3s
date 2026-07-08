@@ -2,6 +2,7 @@
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
+using Sistema3S.Web.DTOs.Compra;
 using Sistema3S.Web.Services.Interfaces;
 
 namespace Sistema3S.Web.Services.Implementations
@@ -95,7 +96,7 @@ namespace Sistema3S.Web.Services.Implementations
                                         });
                                 });
 
-                                row.ConstantItem(170)
+                                row.ConstantItem(190)
                                     .AlignRight()
                                     .Column(col =>
                                     {
@@ -103,6 +104,11 @@ namespace Sistema3S.Web.Services.Implementations
                                             .FontSize(16)
                                             .Bold()
                                             .FontColor(Colors.White);
+
+                                        col.Item().AlignRight().Text($"{compra.SerieComprobante}-{compra.NumeroComprobante}")
+                                            .FontSize(12)
+                                            .Bold()
+                                            .FontColor("#FEE2E2");
 
                                         col.Item().AlignRight().Text(compra.FechaCompra.ToString("dd/MM/yyyy"))
                                             .FontSize(10)
@@ -205,8 +211,8 @@ namespace Sistema3S.Web.Services.Implementations
                                 columns.ConstantColumn(70);
                                 columns.RelativeColumn();
                                 columns.ConstantColumn(55);
-                                columns.ConstantColumn(85);
-                                columns.ConstantColumn(85);
+                                columns.ConstantColumn(90);
+                                columns.ConstantColumn(90);
                             });
 
                             table.Header(header =>
@@ -214,8 +220,8 @@ namespace Sistema3S.Web.Services.Implementations
                                 header.Cell().Element(HeaderCell).Text("Código");
                                 header.Cell().Element(HeaderCell).Text("Producto");
                                 header.Cell().Element(HeaderCell).AlignRight().Text("Cant.");
-                                header.Cell().Element(HeaderCell).AlignRight().Text("Precio");
-                                header.Cell().Element(HeaderCell).AlignRight().Text("Subtotal");
+                                header.Cell().Element(HeaderCell).AlignRight().Text("P. Unit. c/IGV");
+                                header.Cell().Element(HeaderCell).AlignRight().Text("Importe");
                             });
 
                             foreach (var item in compra.Detalles)
@@ -234,7 +240,7 @@ namespace Sistema3S.Web.Services.Implementations
 
                             row.ConstantItem(250).Column(totals =>
                             {
-                                AgregarLineaTotal(totals, "Subtotal", compra.Subtotal, false);
+                                AgregarLineaTotal(totals, "Subtotal sin IGV", compra.Subtotal, false);
                                 AgregarLineaTotal(totals, "IGV 18%", compra.Igv, false);
                                 AgregarLineaTotal(totals, "Total", compra.Total, true);
                                 AgregarLineaTotal(totals, "Pagado", compra.TotalPagado, false);
@@ -295,6 +301,7 @@ namespace Sistema3S.Web.Services.Implementations
                                     columns.ConstantColumn(50);
                                     columns.ConstantColumn(110);
                                     columns.ConstantColumn(100);
+                                    columns.ConstantColumn(100);
                                     columns.RelativeColumn();
                                 });
 
@@ -303,6 +310,7 @@ namespace Sistema3S.Web.Services.Implementations
                                     header.Cell().Element(HeaderCell).Text("N°");
                                     header.Cell().Element(HeaderCell).Text("Vencimiento");
                                     header.Cell().Element(HeaderCell).AlignRight().Text("Monto");
+                                    header.Cell().Element(HeaderCell).AlignRight().Text("Pagado");
                                     header.Cell().Element(HeaderCell).Text("Estado");
                                 });
 
@@ -311,6 +319,7 @@ namespace Sistema3S.Web.Services.Implementations
                                     table.Cell().Element(BodyCell).Text(cuota.NumeroCuota.ToString());
                                     table.Cell().Element(BodyCell).Text(cuota.FechaVencimiento.ToString("dd/MM/yyyy"));
                                     table.Cell().Element(BodyCell).AlignRight().Text($"S/ {cuota.MontoCuota:N2}");
+                                    table.Cell().Element(BodyCell).AlignRight().Text($"S/ {cuota.MontoPagado:N2}");
                                     table.Cell().Element(BodyCell).Text(cuota.EstadoCuota);
                                 }
                             });
@@ -348,6 +357,159 @@ namespace Sistema3S.Web.Services.Implementations
             return memoryStream.ToArray();
         }
 
+        public byte[] GenerarPdfReporteCompras(
+            IEnumerable<ReporteCompraDto> compras,
+            DateTime? fechaInicio,
+            DateTime? fechaFin
+        )
+        {
+            var lista = compras.ToList();
+            var logoPath = ObtenerRutaLogo();
+
+            using var memoryStream = new MemoryStream();
+
+            Document.Create(document =>
+            {
+                document.Page(page =>
+                {
+                    page.Size(PageSizes.A4.Landscape());
+                    page.Margin(28);
+                    page.DefaultTextStyle(style => style.FontSize(8));
+
+                    page.Header().Element(header =>
+                    {
+                        header
+                            .Background("#07111B")
+                            .Padding(14)
+                            .Row(row =>
+                            {
+                                row.ConstantItem(58).Height(58).Element(logoContainer =>
+                                {
+                                    if (!string.IsNullOrWhiteSpace(logoPath) && File.Exists(logoPath))
+                                    {
+                                        logoContainer
+                                            .Background(Colors.White)
+                                            .Padding(5)
+                                            .Image(logoPath)
+                                            .FitArea();
+                                    }
+                                    else
+                                    {
+                                        logoContainer
+                                            .Background(Colors.White)
+                                            .AlignCenter()
+                                            .AlignMiddle()
+                                            .Text("3S")
+                                            .FontSize(17)
+                                            .Bold()
+                                            .FontColor("#D81920");
+                                    }
+                                });
+
+                                row.RelativeItem().PaddingLeft(12).Column(col =>
+                                {
+                                    col.Item().Text("Reporte de compras")
+                                        .FontSize(20)
+                                        .Bold()
+                                        .FontColor(Colors.White);
+
+                                    col.Item().Text(ObtenerTextoRango(fechaInicio, fechaFin))
+                                        .FontSize(10)
+                                        .FontColor("#E5E7EB");
+
+                                    col.Item().Text($"Total de registros: {lista.Count}")
+                                        .FontSize(9)
+                                        .FontColor("#CBD5E1");
+                                });
+
+                                row.ConstantItem(180).AlignRight().Column(col =>
+                                {
+                                    col.Item().AlignRight().Text("Sistema 3S")
+                                        .FontSize(14)
+                                        .Bold()
+                                        .FontColor(Colors.White);
+
+                                    col.Item().AlignRight().Text(DateTime.Now.ToString("dd/MM/yyyy HH:mm"))
+                                        .FontSize(9)
+                                        .FontColor("#E5E7EB");
+                                });
+                            });
+                    });
+
+                    page.Content().PaddingTop(14).Column(col =>
+                    {
+                        col.Spacing(10);
+
+                        col.Item().Table(table =>
+                        {
+                            table.ColumnsDefinition(columns =>
+                            {
+                                columns.ConstantColumn(34);
+                                columns.ConstantColumn(78);
+                                columns.ConstantColumn(92);
+                                columns.RelativeColumn();
+                                columns.ConstantColumn(76);
+                                columns.ConstantColumn(70);
+                                columns.ConstantColumn(70);
+                                columns.ConstantColumn(70);
+                                columns.ConstantColumn(70);
+                                columns.ConstantColumn(70);
+                                columns.ConstantColumn(72);
+                            });
+
+                            table.Header(header =>
+                            {
+                                header.Cell().Element(HeaderCell).Text("ID");
+                                header.Cell().Element(HeaderCell).Text("Fecha");
+                                header.Cell().Element(HeaderCell).Text("Documento");
+                                header.Cell().Element(HeaderCell).Text("Proveedor");
+                                header.Cell().Element(HeaderCell).Text("RUC");
+                                header.Cell().Element(HeaderCell).AlignRight().Text("Subtotal sin IGV");
+                                header.Cell().Element(HeaderCell).AlignRight().Text("IGV");
+                                header.Cell().Element(HeaderCell).AlignRight().Text("Total");
+                                header.Cell().Element(HeaderCell).AlignRight().Text("Pagado");
+                                header.Cell().Element(HeaderCell).AlignRight().Text("Saldo");
+                                header.Cell().Element(HeaderCell).Text("Estado");
+                            });
+
+                            foreach (var item in lista)
+                            {
+                                table.Cell().Element(BodyCell).Text(item.IdCompra.ToString());
+                                table.Cell().Element(BodyCell).Text(item.FechaCompra.ToString("dd/MM/yyyy"));
+                                table.Cell().Element(BodyCell).Text(item.DocumentoCompleto);
+                                table.Cell().Element(BodyCell).Text(item.RazonSocialProveedor);
+                                table.Cell().Element(BodyCell).Text(item.RucProveedor);
+                                table.Cell().Element(BodyCell).AlignRight().Text($"S/ {item.Subtotal:N2}");
+                                table.Cell().Element(BodyCell).AlignRight().Text($"S/ {item.Igv:N2}");
+                                table.Cell().Element(BodyCell).AlignRight().Text($"S/ {item.Total:N2}");
+                                table.Cell().Element(BodyCell).AlignRight().Text($"S/ {item.TotalPagado:N2}");
+                                table.Cell().Element(BodyCell).AlignRight().Text($"S/ {item.SaldoPendiente:N2}");
+                                table.Cell().Element(BodyCell).Text(item.EstadoPago);
+                            }
+                        });
+
+                        col.Item().Row(row =>
+                        {
+                            row.RelativeItem();
+
+                            row.ConstantItem(300).Column(totals =>
+                            {
+                                AgregarLineaTotal(totals, "Total compras", lista.Sum(x => x.Total), true);
+                                AgregarLineaTotal(totals, "Total pagado", lista.Sum(x => x.TotalPagado), false);
+                                AgregarLineaTotal(totals, "Saldo pendiente", lista.Sum(x => x.SaldoPendiente), false);
+                            });
+                        });
+                    });
+
+                    page.Footer().AlignCenter().Text(
+                        "Reporte interno generado por Sistema 3S."
+                    ).FontSize(8).FontColor("#64748B");
+                });
+            }).GeneratePdf(memoryStream);
+
+            return memoryStream.ToArray();
+        }
+
         private string? ObtenerRutaLogo()
         {
             var posiblesRutas = new List<string>();
@@ -371,6 +533,26 @@ namespace Sistema3S.Web.Services.Implementations
             ));
 
             return posiblesRutas.FirstOrDefault(File.Exists);
+        }
+
+        private static string ObtenerTextoRango(DateTime? fechaInicio, DateTime? fechaFin)
+        {
+            if (fechaInicio.HasValue && fechaFin.HasValue)
+            {
+                return $"Del {fechaInicio.Value:dd/MM/yyyy} al {fechaFin.Value:dd/MM/yyyy}";
+            }
+
+            if (fechaInicio.HasValue)
+            {
+                return $"Desde {fechaInicio.Value:dd/MM/yyyy}";
+            }
+
+            if (fechaFin.HasValue)
+            {
+                return $"Hasta {fechaFin.Value:dd/MM/yyyy}";
+            }
+
+            return "Todas las compras registradas";
         }
 
         private static void CrearCajaInformacion(

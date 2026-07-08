@@ -7,6 +7,8 @@ namespace Sistema3S.Web.Services.Interfaces
     {
         Task<ResultadoPaginadoDto<CotizacionListadoDto>> ListarAsync(
             string? buscar,
+            string? estado,
+            string? origen,
             int pagina,
             int tamanioPagina
         );
@@ -15,19 +17,38 @@ namespace Sistema3S.Web.Services.Interfaces
 
         Task<CotizacionListadoDto> CrearAsync(CotizacionCrearDto dto);
 
-        Task<bool> ActualizarAsync(int idCotizacion, CotizacionActualizarDto dto);
+        Task<bool> CancelarAsync(int idCotizacion, int? idUsuarioAtencion);
 
-        Task<bool> CancelarAsync(int idCotizacion);
-
-        Task<bool> CambiarEstadoAsync(int idCotizacion, int idEstadoCotizacion);
+        Task<bool> CambiarEstadoAsync(
+            int idCotizacion,
+            CotizacionCambiarEstadoDto dto
+        );
 
         Task<string> GenerarPdfAsync(int idCotizacion);
 
-        Task<bool> MarcarCorreoEnviadoAsync(int idCotizacion);
+        Task<bool> EnviarCorreoAsync(
+            int idCotizacion,
+            int? idUsuarioAtencion
+        );
 
         Task<CotizacionWhatsAppDto> ObtenerWhatsAppAsync(int idCotizacion);
 
-        Task<int> ConvertirEnVentaAsync(int idCotizacion, int? idUsuarioRegistro);
+        Task<bool> MarcarRespondidaAsync(
+            int idCotizacion,
+            CotizacionMarcarRespondidaDto dto
+        );
+
+        Task<CotizacionListadoDto> PrepararParaVentaAsync(int idCotizacion);
+
+        Task<CotizacionWhatsAppDto> EnviarWhatsAppAsync(
+    int idCotizacion,
+    int? idUsuarioAtencion
+);
+
+        Task<bool> MarcarConvertidaVentaAsync(
+            int idCotizacion,
+            CotizacionConvertirVentaDto dto
+        );
 
         Task<int> ContarPendientesAsync();
 

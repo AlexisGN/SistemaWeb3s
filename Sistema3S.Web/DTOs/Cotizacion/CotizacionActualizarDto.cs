@@ -3,7 +3,6 @@
     public class CotizacionActualizarDto
     {
         public int IdCliente { get; set; }
-        public int IdEstadoCotizacion { get; set; }
 
         public int? IdUsuarioAtencion { get; set; }
 
@@ -12,8 +11,6 @@
         public decimal Descuento { get; set; } = 0;
 
         public string? Observacion { get; set; }
-        public string? ArchivoPdf { get; set; }
-        public bool CorreoEnviado { get; set; }
 
         public List<CotizacionDetalleCrearDto> Detalles { get; set; } = new();
     }

@@ -2,6 +2,7 @@
 {
     public class CotizacionConvertirVentaDto
     {
-        public int? IdUsuarioRegistro { get; set; }
+        public int IdVenta { get; set; }
+        public int? IdUsuarioAtencion { get; set; }
     }
 }

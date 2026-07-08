@@ -9,5 +9,9 @@
         public decimal MontoPagado { get; set; }
 
         public string? Observacion { get; set; }
+
+        // Para compras en cuotas:
+        // aquí se envían las cuotas seleccionadas desde el frontend.
+        public List<int> IdsCuotasPagadas { get; set; } = new();
     }
 }

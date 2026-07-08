@@ -10,14 +10,17 @@ namespace Sistema3S.Web.Controllers
     {
         private readonly ICompraService _compraService;
         private readonly IPdfCompraService _pdfCompraService;
+        private readonly IExcelCompraService _excelCompraService;
 
         public CompraController(
             ICompraService compraService,
-            IPdfCompraService pdfCompraService
+            IPdfCompraService pdfCompraService,
+            IExcelCompraService excelCompraService
         )
         {
             _compraService = compraService;
             _pdfCompraService = pdfCompraService;
+            _excelCompraService = excelCompraService;
         }
 
         [HttpGet]
@@ -107,6 +110,82 @@ namespace Sistema3S.Web.Controllers
                 return StatusCode(500, new
                 {
                     mensaje = "No se pudo generar el PDF de la compra."
+                });
+            }
+        }
+
+        [HttpGet("reporte/pdf")]
+        public async Task<IActionResult> GenerarReportePdf(
+            [FromQuery] string? buscar,
+            [FromQuery] string? estadoPago,
+            [FromQuery] DateTime? fechaInicio,
+            [FromQuery] DateTime? fechaFin
+        )
+        {
+            try
+            {
+                var compras = await _compraService.ObtenerReporteAsync(
+                    buscar,
+                    estadoPago,
+                    fechaInicio,
+                    fechaFin
+                );
+
+                var pdfBytes = _pdfCompraService.GenerarPdfReporteCompras(
+                    compras,
+                    fechaInicio,
+                    fechaFin
+                );
+
+                var nombreArchivo = $"reporte-compras-{DateTime.Now:yyyyMMddHHmmss}.pdf";
+
+                return File(pdfBytes, "application/pdf", nombreArchivo);
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo generar el reporte PDF de compras."
+                });
+            }
+        }
+
+        [HttpGet("reporte/excel")]
+        public async Task<IActionResult> GenerarReporteExcel(
+            [FromQuery] string? buscar,
+            [FromQuery] string? estadoPago,
+            [FromQuery] DateTime? fechaInicio,
+            [FromQuery] DateTime? fechaFin
+        )
+        {
+            try
+            {
+                var compras = await _compraService.ObtenerReporteAsync(
+                    buscar,
+                    estadoPago,
+                    fechaInicio,
+                    fechaFin
+                );
+
+                var excelBytes = _excelCompraService.GenerarExcelReporteCompras(
+                    compras,
+                    fechaInicio,
+                    fechaFin
+                );
+
+                var nombreArchivo = $"reporte-compras-{DateTime.Now:yyyyMMddHHmmss}.xlsx";
+
+                return File(
+                    excelBytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    nombreArchivo
+                );
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new
+                {
+                    mensaje = "No se pudo generar el reporte Excel de compras."
                 });
             }
         }

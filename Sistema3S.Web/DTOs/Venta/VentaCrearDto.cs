@@ -21,5 +21,19 @@
         public DateTime? FechaPrimerVencimiento { get; set; }
 
         public List<VentaDetalleCrearDto> Detalles { get; set; } = new();
+
+        // Cronograma editable de cuotas.
+        // Se usa cuando TipoPago = "Cuotas".
+        public List<CuotaVentaCrearDto> Cuotas { get; set; } = new();
+    }
+
+    public class CuotaVentaCrearDto
+    {
+        public int NumeroCuota { get; set; }
+        public DateTime? FechaVencimiento { get; set; }
+
+        // Este monto se usa para validar/mostrar desde frontend.
+        // El SQL recalcula los montos finales para evitar descuadres.
+        public decimal MontoCuota { get; set; }
     }
 }

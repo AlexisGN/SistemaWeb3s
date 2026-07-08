@@ -1,4 +1,5 @@
 ﻿using System.Data;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Sistema3S.Web.Data;
@@ -117,15 +118,26 @@ namespace Sistema3S.Web.Services.Implementations
             detalleParam.SqlDbType = SqlDbType.Structured;
             detalleParam.TypeName = "VentaDetalleType";
 
-            await using var reader = await command.ExecuteReaderAsync();
+            var cuotasJsonParam = command.Parameters.Add("@CuotasJson", SqlDbType.NVarChar, -1);
+            cuotasJsonParam.Value = CrearCuotasJson(dto);
 
-            if (!await reader.ReadAsync())
+            try
             {
-                throw new InvalidOperationException("No se pudo obtener el resultado de la venta.");
-            }
+                await using var reader = await command.ExecuteReaderAsync();
 
-            return LeerResultadoVenta(reader);
+                if (!await reader.ReadAsync())
+                {
+                    throw new InvalidOperationException("No se pudo obtener el resultado de la venta.");
+                }
+
+                return LeerResultadoVenta(reader);
+            }
+            catch (SqlException ex)
+            {
+                throw new InvalidOperationException(ObtenerMensajeSql(ex));
+            }
         }
+
         public async Task<SiguienteComprobanteDto> ObtenerSiguienteComprobanteAsync(string tipoComprobante)
         {
             if (string.IsNullOrWhiteSpace(tipoComprobante))
@@ -154,6 +166,7 @@ namespace Sistema3S.Web.Services.Implementations
                 DocumentoCompleto = LeerString(reader, "DocumentoCompleto")
             };
         }
+
         public async Task<VentaDetalleCompletoDto?> ObtenerDetalleAsync(int idVenta)
         {
             if (idVenta <= 0)
@@ -270,17 +283,17 @@ namespace Sistema3S.Web.Services.Implementations
 
             if (dto.IdUsuarioRegistro <= 0)
             {
-                throw new InvalidOperationException("El usuario que registra el pago no es válido.");
+                throw new InvalidOperationException("El usuario que registra el cobro no es válido.");
             }
 
             if (string.IsNullOrWhiteSpace(dto.MetodoPago))
             {
-                throw new InvalidOperationException("Selecciona el método de pago.");
+                throw new InvalidOperationException("Selecciona el método de cobro.");
             }
 
             if (dto.MontoPagado <= 0)
             {
-                throw new InvalidOperationException("El monto pagado debe ser mayor a 0.");
+                throw new InvalidOperationException("El monto cobrado debe ser mayor a 0.");
             }
 
             await using var connection = new SqlConnection(_context.Database.GetConnectionString());
@@ -295,14 +308,24 @@ namespace Sistema3S.Web.Services.Implementations
             command.Parameters.AddWithValue("@MontoPagado", dto.MontoPagado);
             command.Parameters.AddWithValue("@Observacion", (object?)dto.Observacion?.Trim() ?? DBNull.Value);
 
-            await using var reader = await command.ExecuteReaderAsync();
+            var cuotasCobradasJsonParam = command.Parameters.Add("@CuotasCobradasJson", SqlDbType.NVarChar, -1);
+            cuotasCobradasJsonParam.Value = CrearCuotasCobradasJson(dto);
 
-            if (!await reader.ReadAsync())
+            try
             {
-                throw new InvalidOperationException("No se pudo obtener el resultado del pago.");
-            }
+                await using var reader = await command.ExecuteReaderAsync();
 
-            return LeerResultadoVenta(reader);
+                if (!await reader.ReadAsync())
+                {
+                    throw new InvalidOperationException("No se pudo obtener el resultado del cobro.");
+                }
+
+                return LeerResultadoVenta(reader);
+            }
+            catch (SqlException ex)
+            {
+                throw new InvalidOperationException(ObtenerMensajeSql(ex));
+            }
         }
 
         public async Task<bool> AnularAsync(int idVenta, AnularVentaDto dto)
@@ -332,9 +355,15 @@ namespace Sistema3S.Web.Services.Implementations
             command.Parameters.AddWithValue("@IdUsuarioRegistro", dto.IdUsuarioRegistro);
             command.Parameters.AddWithValue("@Motivo", dto.Motivo.Trim());
 
-            await command.ExecuteNonQueryAsync();
-
-            return true;
+            try
+            {
+                await command.ExecuteNonQueryAsync();
+                return true;
+            }
+            catch (SqlException ex)
+            {
+                throw new InvalidOperationException(ObtenerMensajeSql(ex));
+            }
         }
 
         public async Task<List<ReporteVentaDto>> ObtenerReporteAsync(
@@ -406,15 +435,23 @@ namespace Sistema3S.Web.Services.Implementations
                 throw new InvalidOperationException("Selecciona el tipo de comprobante.");
             }
 
+            var comprobantesPermitidos = new[] { "Factura", "Boleta", "Nota de venta" };
+
+            if (!comprobantesPermitidos.Contains(dto.TipoComprobante.Trim()))
+            {
+                throw new InvalidOperationException("Tipo de comprobante no válido.");
+            }
 
             if (string.IsNullOrWhiteSpace(dto.TipoPago))
             {
-                throw new InvalidOperationException("Selecciona el tipo de pago.");
+                throw new InvalidOperationException("Selecciona el tipo de cobro.");
             }
 
-            if (string.IsNullOrWhiteSpace(dto.MetodoPago))
+            var tiposPagoPermitidos = new[] { "Total", "Parcial", "Cuotas" };
+
+            if (!tiposPagoPermitidos.Contains(dto.TipoPago.Trim()))
             {
-                throw new InvalidOperationException("Selecciona el método de pago.");
+                throw new InvalidOperationException("Selecciona un tipo de cobro válido.");
             }
 
             if (dto.Detalles == null || dto.Detalles.Count == 0)
@@ -436,6 +473,146 @@ namespace Sistema3S.Web.Services.Implementations
             {
                 throw new InvalidOperationException("El precio debe ser mayor a 0.");
             }
+
+            var total = dto.Detalles.Sum(d => d.Cantidad * d.PrecioUnitario);
+            total = Math.Round(total, 2);
+
+            dto.MontoPagado = Math.Round(dto.MontoPagado, 2);
+
+            if (dto.MontoPagado < 0)
+            {
+                throw new InvalidOperationException("El monto cobrado no puede ser negativo.");
+            }
+
+            if (dto.MontoPagado > total)
+            {
+                throw new InvalidOperationException("El monto cobrado no puede ser mayor al total.");
+            }
+
+            if (dto.MontoPagado > 0 && string.IsNullOrWhiteSpace(dto.MetodoPago))
+            {
+                throw new InvalidOperationException("Selecciona el método de cobro.");
+            }
+
+            if (dto.TipoPago == "Total" && dto.MontoPagado != total)
+            {
+                throw new InvalidOperationException("Para cobro total, el monto cobrado debe ser igual al total.");
+            }
+
+            if (dto.TipoPago == "Parcial" && (dto.MontoPagado <= 0 || dto.MontoPagado >= total))
+            {
+                throw new InvalidOperationException("Para cobro parcial, el monto debe ser mayor a 0 y menor al total.");
+            }
+
+            if (dto.TipoPago != "Cuotas" && dto.Cuotas != null && dto.Cuotas.Count > 0)
+            {
+                throw new InvalidOperationException("Solo las ventas en cuotas pueden tener cronograma.");
+            }
+
+            if (dto.TipoPago == "Cuotas")
+            {
+                if (!dto.NumeroCuotas.HasValue || dto.NumeroCuotas.Value <= 0)
+                {
+                    throw new InvalidOperationException("Ingresa un número de cuotas válido.");
+                }
+
+                if (dto.NumeroCuotas.Value > 24)
+                {
+                    throw new InvalidOperationException("El número máximo permitido es 24 cuotas.");
+                }
+
+                if (!dto.FechaPrimerVencimiento.HasValue)
+                {
+                    throw new InvalidOperationException("Ingresa la fecha del primer vencimiento.");
+                }
+
+                if (dto.MontoPagado >= total)
+                {
+                    throw new InvalidOperationException("Para cobro en cuotas, debe quedar un saldo pendiente.");
+                }
+
+                if (dto.Cuotas != null && dto.Cuotas.Count > 0)
+                {
+                    if (dto.Cuotas.Count != dto.NumeroCuotas.Value)
+                    {
+                        throw new InvalidOperationException("La cantidad de cuotas no coincide con el número de cuotas indicado.");
+                    }
+
+                    var numerosCuota = dto.Cuotas.Select(c => c.NumeroCuota).ToList();
+
+                    if (numerosCuota.Any(n => n <= 0 || n > dto.NumeroCuotas.Value))
+                    {
+                        throw new InvalidOperationException("Existe una cuota con número fuera del rango permitido.");
+                    }
+
+                    if (numerosCuota.Distinct().Count() != dto.NumeroCuotas.Value)
+                    {
+                        throw new InvalidOperationException("Las cuotas no pueden estar repetidas.");
+                    }
+
+                    if (dto.Cuotas.Any(c => !c.FechaVencimiento.HasValue))
+                    {
+                        throw new InvalidOperationException("Todas las cuotas deben tener fecha de vencimiento.");
+                    }
+
+                    if (dto.Cuotas.Any(c => c.MontoCuota <= 0))
+                    {
+                        throw new InvalidOperationException("El monto de cada cuota debe ser mayor a 0.");
+                    }
+
+                    var saldoFinanciar = Math.Round(total - dto.MontoPagado, 2);
+                    var totalCuotas = Math.Round(dto.Cuotas.Sum(c => c.MontoCuota), 2);
+
+                    if (saldoFinanciar != totalCuotas)
+                    {
+                        throw new InvalidOperationException("La suma de las cuotas debe ser igual al saldo pendiente.");
+                    }
+                }
+            }
+        }
+
+        private static object CrearCuotasJson(VentaCrearDto dto)
+        {
+            if (dto.TipoPago != "Cuotas")
+            {
+                return DBNull.Value;
+            }
+
+            if (dto.Cuotas == null || dto.Cuotas.Count == 0)
+            {
+                return DBNull.Value;
+            }
+
+            var cuotas = dto.Cuotas
+                .OrderBy(c => c.NumeroCuota)
+                .Select(c => new
+                {
+                    numeroCuota = c.NumeroCuota,
+                    fechaVencimiento = c.FechaVencimiento?.Date.ToString("yyyy-MM-dd")
+                })
+                .ToList();
+
+            return JsonSerializer.Serialize(cuotas);
+        }
+
+        private static object CrearCuotasCobradasJson(PagoVentaCrearDto dto)
+        {
+            if (dto.IdsCuotasCobradas == null || dto.IdsCuotasCobradas.Count == 0)
+            {
+                return DBNull.Value;
+            }
+
+            var idsCuotas = dto.IdsCuotasCobradas
+                .Where(id => id > 0)
+                .Distinct()
+                .ToList();
+
+            if (idsCuotas.Count == 0)
+            {
+                return DBNull.Value;
+            }
+
+            return JsonSerializer.Serialize(idsCuotas);
         }
 
         private static DataTable CrearDetalleDataTable(IEnumerable<VentaDetalleCrearDto> detalles)
@@ -471,6 +648,16 @@ namespace Sistema3S.Web.Services.Implementations
                 EstadoPago = LeerString(reader, "EstadoPago"),
                 Mensaje = LeerString(reader, "Mensaje")
             };
+        }
+
+        private static string ObtenerMensajeSql(SqlException ex)
+        {
+            if (ex.Errors.Count > 0)
+            {
+                return ex.Errors[0].Message;
+            }
+
+            return ex.Message;
         }
 
         private static int LeerInt(SqlDataReader reader, string columna)

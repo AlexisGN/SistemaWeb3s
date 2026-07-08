@@ -22,14 +22,7 @@ namespace Sistema3S.Web.Services.Implementations
         {
             ValidarCompra(dto);
 
-            var detallesJson = JsonSerializer.Serialize(
-                dto.Detalles.Select(d => new
-                {
-                    idProducto = d.IdProducto,
-                    cantidad = d.Cantidad,
-                    precioCompra = d.PrecioCompra
-                })
-            );
+            var detallesTable = CrearTablaDetalles(dto.Detalles);
 
             await using var connection = new SqlConnection(_context.Database.GetConnectionString());
             await connection.OpenAsync();
@@ -44,7 +37,6 @@ namespace Sistema3S.Web.Services.Implementations
             command.Parameters.AddWithValue("@SerieComprobante", dto.SerieComprobante.Trim());
             command.Parameters.AddWithValue("@NumeroComprobante", dto.NumeroComprobante.Trim());
             command.Parameters.AddWithValue("@FechaEmisionComprobante", dto.FechaEmisionComprobante!.Value.Date);
-
             command.Parameters.AddWithValue("@ObservacionCompra", ValorONull(dto.ObservacionCompra));
 
             command.Parameters.AddWithValue("@TieneGuia", dto.GuiaRemision.TieneGuia);
@@ -56,16 +48,21 @@ namespace Sistema3S.Web.Services.Implementations
             command.Parameters.AddWithValue("@Transportista", ValorONull(dto.GuiaRemision.Transportista));
             command.Parameters.AddWithValue("@RucTransportista", ValorONull(dto.GuiaRemision.RucTransportista));
             command.Parameters.AddWithValue("@PlacaVehiculo", ValorONull(dto.GuiaRemision.PlacaVehiculo));
-            command.Parameters.AddWithValue("@ObservacionTraslado", ValorONull(dto.GuiaRemision.Observacion));
+            command.Parameters.AddWithValue("@ObservacionGuia", ValorONull(dto.GuiaRemision.Observacion));
 
             command.Parameters.AddWithValue("@TipoPago", dto.TipoPago.Trim());
             command.Parameters.AddWithValue("@MetodoPago", dto.MetodoPago.Trim());
             command.Parameters.AddWithValue("@MontoPagado", dto.MontoPagado);
+            command.Parameters.AddWithValue("@ObservacionPago", ValorONull(dto.ObservacionPago));
             command.Parameters.AddWithValue("@NumeroCuotas", dto.NumeroCuotas.HasValue ? dto.NumeroCuotas.Value : DBNull.Value);
             command.Parameters.AddWithValue("@FechaPrimerVencimiento", FechaONull(dto.FechaPrimerVencimiento));
-            command.Parameters.AddWithValue("@ObservacionPago", ValorONull(dto.ObservacionPago));
 
-            command.Parameters.AddWithValue("@DetallesJson", detallesJson);
+            var detallesParameter = command.Parameters.Add("@Detalles", SqlDbType.Structured);
+            detallesParameter.TypeName = "CompraDetalleType";
+            detallesParameter.Value = detallesTable;
+
+            var cuotasJsonParameter = command.Parameters.Add("@CuotasJson", SqlDbType.NVarChar, -1);
+            cuotasJsonParameter.Value = CrearCuotasJson(dto);
 
             try
             {
@@ -76,16 +73,7 @@ namespace Sistema3S.Web.Services.Implementations
                     throw new InvalidOperationException("No se pudo registrar la compra.");
                 }
 
-                return new CompraRegistroResultadoDto
-                {
-                    IdCompra = Convert.ToInt32(reader["IdCompra"]),
-                    Subtotal = Convert.ToDecimal(reader["Subtotal"]),
-                    Igv = Convert.ToDecimal(reader["Igv"]),
-                    Total = Convert.ToDecimal(reader["Total"]),
-                    TotalPagado = Convert.ToDecimal(reader["TotalPagado"]),
-                    SaldoPendiente = Convert.ToDecimal(reader["SaldoPendiente"]),
-                    Mensaje = "Compra registrada correctamente."
-                };
+                return LeerResultadoCompra(reader, "Compra registrada correctamente.");
             }
             catch (SqlException ex)
             {
@@ -142,25 +130,19 @@ namespace Sistema3S.Web.Services.Implementations
                     totalRegistros = Convert.ToInt32(reader["TotalRegistros"]);
                 }
 
-                var serie = reader["SerieComprobante"]?.ToString() ?? string.Empty;
-                var numero = reader["NumeroComprobante"]?.ToString() ?? string.Empty;
-
                 compras.Add(new CompraListadoDto
                 {
                     IdCompra = Convert.ToInt32(reader["IdCompra"]),
                     FechaCompra = Convert.ToDateTime(reader["FechaCompra"]),
-                    FechaEmisionComprobante = reader["FechaEmisionComprobante"] == DBNull.Value
-                        ? null
-                        : Convert.ToDateTime(reader["FechaEmisionComprobante"]),
 
                     TipoComprobanteProveedor = reader["TipoComprobanteProveedor"]?.ToString() ?? string.Empty,
-                    SerieComprobante = serie,
-                    NumeroComprobante = numero,
-                    DocumentoCompleto = $"{serie}-{numero}",
+                    SerieComprobante = reader["SerieComprobante"]?.ToString() ?? string.Empty,
+                    NumeroComprobante = reader["NumeroComprobante"]?.ToString() ?? string.Empty,
+                    DocumentoCompleto = reader["DocumentoCompleto"]?.ToString() ?? string.Empty,
 
                     IdProveedor = Convert.ToInt32(reader["IdProveedor"]),
-                    RucProveedor = reader["Ruc"]?.ToString() ?? string.Empty,
-                    RazonSocialProveedor = reader["RazonSocial"]?.ToString() ?? string.Empty,
+                    RucProveedor = reader["RucProveedor"]?.ToString() ?? string.Empty,
+                    RazonSocialProveedor = reader["RazonSocialProveedor"]?.ToString() ?? string.Empty,
 
                     Subtotal = Convert.ToDecimal(reader["Subtotal"]),
                     Igv = Convert.ToDecimal(reader["Igv"]),
@@ -182,6 +164,151 @@ namespace Sistema3S.Web.Services.Implementations
                 TamanioPagina = tamanioPagina,
                 TotalRegistros = totalRegistros
             };
+        }
+
+        public async Task<CompraDetalleCompletoDto?> ObtenerDetalleAsync(int idCompra)
+        {
+            if (idCompra <= 0)
+            {
+                throw new InvalidOperationException("Selecciona una compra válida.");
+            }
+
+            await using var connection = new SqlConnection(_context.Database.GetConnectionString());
+            await connection.OpenAsync();
+
+            await using var command = new SqlCommand("sp_ObtenerCompraDetalle", connection);
+            command.CommandType = CommandType.StoredProcedure;
+            command.Parameters.AddWithValue("@IdCompra", idCompra);
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            CompraDetalleCompletoDto? compra = null;
+
+            if (await reader.ReadAsync())
+            {
+                compra = new CompraDetalleCompletoDto
+                {
+                    IdCompra = Convert.ToInt32(reader["IdCompra"]),
+                    FechaCompra = Convert.ToDateTime(reader["FechaCompra"]),
+                    FechaEmisionComprobante = reader["FechaEmisionComprobante"] == DBNull.Value
+                        ? null
+                        : Convert.ToDateTime(reader["FechaEmisionComprobante"]),
+
+                    TipoComprobanteProveedor = reader["TipoComprobanteProveedor"]?.ToString() ?? string.Empty,
+                    SerieComprobante = reader["SerieComprobante"]?.ToString() ?? string.Empty,
+                    NumeroComprobante = reader["NumeroComprobante"]?.ToString() ?? string.Empty,
+
+                    Subtotal = Convert.ToDecimal(reader["Subtotal"]),
+                    Igv = Convert.ToDecimal(reader["Igv"]),
+                    Total = Convert.ToDecimal(reader["Total"]),
+                    TotalPagado = Convert.ToDecimal(reader["TotalPagado"]),
+                    SaldoPendiente = Convert.ToDecimal(reader["SaldoPendiente"]),
+
+                    Observacion = reader["ObservacionCompra"] == DBNull.Value
+                        ? null
+                        : reader["ObservacionCompra"]?.ToString(),
+
+                    EstadoCompra = reader["EstadoCompra"]?.ToString() ?? string.Empty,
+                    EstadoPago = reader["EstadoPago"]?.ToString() ?? string.Empty,
+
+                    IdProveedor = Convert.ToInt32(reader["IdProveedor"]),
+                    RucProveedor = reader["RucProveedor"]?.ToString() ?? string.Empty,
+                    RazonSocialProveedor = reader["RazonSocialProveedor"]?.ToString() ?? string.Empty,
+                    NombreComercialProveedor = reader["NombreComercial"] == DBNull.Value
+                        ? null
+                        : reader["NombreComercial"]?.ToString(),
+                    CorreoProveedor = reader["CorreoProveedor"] == DBNull.Value
+                        ? null
+                        : reader["CorreoProveedor"]?.ToString(),
+                    TelefonoProveedor = reader["TelefonoProveedor"] == DBNull.Value
+                        ? null
+                        : reader["TelefonoProveedor"]?.ToString(),
+                    DireccionProveedor = reader["DireccionProveedor"] == DBNull.Value
+                        ? null
+                        : reader["DireccionProveedor"]?.ToString()
+                };
+            }
+
+            if (compra == null)
+            {
+                return null;
+            }
+
+            await reader.NextResultAsync();
+
+            while (await reader.ReadAsync())
+            {
+                compra.Detalles.Add(new DetalleCompraDetalleDto
+                {
+                    IdDetalleCompra = Convert.ToInt32(reader["IdDetalleCompra"]),
+                    IdProducto = Convert.ToInt32(reader["IdProducto"]),
+                    CodigoProducto = reader["CodigoProducto"]?.ToString() ?? string.Empty,
+                    Producto = reader["Producto"]?.ToString() ?? string.Empty,
+                    Cantidad = Convert.ToInt32(reader["Cantidad"]),
+                    PrecioCompra = Convert.ToDecimal(reader["PrecioCompra"]),
+                    Subtotal = Convert.ToDecimal(reader["Subtotal"])
+                });
+            }
+
+            await reader.NextResultAsync();
+
+            while (await reader.ReadAsync())
+            {
+                compra.Pagos.Add(new PagoCompraDetalleDto
+                {
+                    IdPagoCompra = Convert.ToInt32(reader["IdPagoCompra"]),
+                    MetodoPago = reader["MetodoPago"]?.ToString() ?? string.Empty,
+                    MontoPagado = Convert.ToDecimal(reader["MontoPagado"]),
+                    FechaPago = Convert.ToDateTime(reader["FechaPago"]),
+                    Observacion = reader["Observacion"] == DBNull.Value
+                        ? null
+                        : reader["Observacion"]?.ToString()
+                });
+            }
+
+            await reader.NextResultAsync();
+
+            while (await reader.ReadAsync())
+            {
+                compra.Cuotas.Add(new CuotaCompraDetalleDto
+                {
+                    IdCuotaCompra = Convert.ToInt32(reader["IdCuotaCompra"]),
+                    NumeroCuota = Convert.ToInt32(reader["NumeroCuota"]),
+                    FechaVencimiento = Convert.ToDateTime(reader["FechaVencimiento"]),
+                    MontoCuota = Convert.ToDecimal(reader["MontoCuota"]),
+                    MontoPagado = Convert.ToDecimal(reader["MontoPagado"]),
+                    EstadoCuota = reader["EstadoCuota"]?.ToString() ?? string.Empty
+                });
+            }
+
+            await reader.NextResultAsync();
+
+            if (await reader.ReadAsync())
+            {
+                compra.GuiaRemision = new GuiaRemisionCompraDetalleDto
+                {
+                    IdGuiaRemisionCompra = Convert.ToInt32(reader["IdGuiaRemisionCompra"]),
+                    NumeroGuia = reader["NumeroGuia"]?.ToString() ?? string.Empty,
+                    FechaEmision = Convert.ToDateTime(reader["FechaEmision"]),
+                    FechaTraslado = Convert.ToDateTime(reader["FechaTraslado"]),
+                    PuntoPartida = reader["PuntoPartida"]?.ToString() ?? string.Empty,
+                    PuntoLlegada = reader["PuntoLlegada"]?.ToString() ?? string.Empty,
+                    Transportista = reader["Transportista"] == DBNull.Value
+                        ? null
+                        : reader["Transportista"]?.ToString(),
+                    RucTransportista = reader["RucTransportista"] == DBNull.Value
+                        ? null
+                        : reader["RucTransportista"]?.ToString(),
+                    PlacaVehiculo = reader["PlacaVehiculo"] == DBNull.Value
+                        ? null
+                        : reader["PlacaVehiculo"]?.ToString(),
+                    Observacion = reader["Observacion"] == DBNull.Value
+                        ? null
+                        : reader["Observacion"]?.ToString()
+                };
+            }
+
+            return compra;
         }
 
         public async Task<CompraRegistroResultadoDto> RegistrarPagoAsync(PagoCompraCrearDto dto)
@@ -218,6 +345,9 @@ namespace Sistema3S.Web.Services.Implementations
             command.Parameters.AddWithValue("@MontoPagado", dto.MontoPagado);
             command.Parameters.AddWithValue("@Observacion", ValorONull(dto.Observacion));
 
+            var cuotasPagadasJsonParameter = command.Parameters.Add("@CuotasPagadasJson", SqlDbType.NVarChar, -1);
+            cuotasPagadasJsonParameter.Value = CrearCuotasPagadasJson(dto);
+
             try
             {
                 await using var reader = await command.ExecuteReaderAsync();
@@ -227,13 +357,7 @@ namespace Sistema3S.Web.Services.Implementations
                     throw new InvalidOperationException("No se pudo registrar el pago.");
                 }
 
-                return new CompraRegistroResultadoDto
-                {
-                    IdCompra = Convert.ToInt32(reader["IdCompra"]),
-                    TotalPagado = Convert.ToDecimal(reader["TotalPagado"]),
-                    SaldoPendiente = Convert.ToDecimal(reader["SaldoPendiente"]),
-                    Mensaje = "Pago registrado correctamente."
-                };
+                return LeerResultadoCompra(reader, "Pago registrado correctamente.");
             }
             catch (SqlException ex)
             {
@@ -278,37 +402,43 @@ namespace Sistema3S.Web.Services.Implementations
                 throw new InvalidOperationException(ObtenerMensajeSql(ex));
             }
         }
-        public async Task<CompraDetalleCompletoDto?> ObtenerDetalleAsync(int idCompra)
+
+        public async Task<List<ReporteCompraDto>> ObtenerReporteAsync(
+            string? buscar,
+            string? estadoPago,
+            DateTime? fechaInicio,
+            DateTime? fechaFin
+        )
         {
-            if (idCompra <= 0)
-            {
-                throw new InvalidOperationException("Selecciona una compra válida.");
-            }
+            var compras = new List<ReporteCompraDto>();
 
             await using var connection = new SqlConnection(_context.Database.GetConnectionString());
             await connection.OpenAsync();
 
-            await using var command = new SqlCommand("sp_ObtenerCompraDetalle", connection);
+            await using var command = new SqlCommand("sp_ReporteCompras", connection);
             command.CommandType = CommandType.StoredProcedure;
-            command.Parameters.AddWithValue("@IdCompra", idCompra);
+
+            command.Parameters.AddWithValue("@Buscar", ValorONull(buscar));
+            command.Parameters.AddWithValue("@EstadoPago", ValorONull(estadoPago));
+            command.Parameters.AddWithValue("@FechaInicio", FechaONull(fechaInicio));
+            command.Parameters.AddWithValue("@FechaFin", FechaONull(fechaFin));
 
             await using var reader = await command.ExecuteReaderAsync();
 
-            CompraDetalleCompletoDto? compra = null;
-
-            if (await reader.ReadAsync())
+            while (await reader.ReadAsync())
             {
-                compra = new CompraDetalleCompletoDto
+                compras.Add(new ReporteCompraDto
                 {
                     IdCompra = Convert.ToInt32(reader["IdCompra"]),
                     FechaCompra = Convert.ToDateTime(reader["FechaCompra"]),
-                    FechaEmisionComprobante = reader["FechaEmisionComprobante"] == DBNull.Value
-                        ? null
-                        : Convert.ToDateTime(reader["FechaEmisionComprobante"]),
 
                     TipoComprobanteProveedor = reader["TipoComprobanteProveedor"]?.ToString() ?? string.Empty,
                     SerieComprobante = reader["SerieComprobante"]?.ToString() ?? string.Empty,
                     NumeroComprobante = reader["NumeroComprobante"]?.ToString() ?? string.Empty,
+                    DocumentoCompleto = reader["DocumentoCompleto"]?.ToString() ?? string.Empty,
+
+                    RucProveedor = reader["RucProveedor"]?.ToString() ?? string.Empty,
+                    RazonSocialProveedor = reader["RazonSocialProveedor"]?.ToString() ?? string.Empty,
 
                     Subtotal = Convert.ToDecimal(reader["Subtotal"]),
                     Igv = Convert.ToDecimal(reader["Igv"]),
@@ -316,92 +446,77 @@ namespace Sistema3S.Web.Services.Implementations
                     TotalPagado = Convert.ToDecimal(reader["TotalPagado"]),
                     SaldoPendiente = Convert.ToDecimal(reader["SaldoPendiente"]),
 
-                    Observacion = reader["Observacion"] == DBNull.Value ? null : reader["Observacion"]?.ToString(),
-
                     EstadoCompra = reader["EstadoCompra"]?.ToString() ?? string.Empty,
                     EstadoPago = reader["EstadoPago"]?.ToString() ?? string.Empty,
 
-                    IdProveedor = Convert.ToInt32(reader["IdProveedor"]),
-                    RucProveedor = reader["Ruc"]?.ToString() ?? string.Empty,
-                    RazonSocialProveedor = reader["RazonSocial"]?.ToString() ?? string.Empty,
-                    NombreComercialProveedor = reader["NombreComercial"] == DBNull.Value ? null : reader["NombreComercial"]?.ToString(),
-                    CorreoProveedor = reader["Correo"] == DBNull.Value ? null : reader["Correo"]?.ToString(),
-                    TelefonoProveedor = reader["Telefono"] == DBNull.Value ? null : reader["Telefono"]?.ToString(),
-                    DireccionProveedor = reader["Direccion"] == DBNull.Value ? null : reader["Direccion"]?.ToString()
-                };
-            }
-
-            if (compra == null)
-            {
-                return null;
-            }
-
-            await reader.NextResultAsync();
-
-            if (await reader.ReadAsync())
-            {
-                compra.GuiaRemision = new GuiaRemisionCompraDetalleDto
-                {
-                    IdGuiaRemisionCompra = Convert.ToInt32(reader["IdGuiaRemisionCompra"]),
-                    NumeroGuia = reader["NumeroGuia"]?.ToString() ?? string.Empty,
-                    FechaEmision = Convert.ToDateTime(reader["FechaEmision"]),
-                    FechaTraslado = Convert.ToDateTime(reader["FechaTraslado"]),
-                    PuntoPartida = reader["PuntoPartida"]?.ToString() ?? string.Empty,
-                    PuntoLlegada = reader["PuntoLlegada"]?.ToString() ?? string.Empty,
-                    Transportista = reader["Transportista"] == DBNull.Value ? null : reader["Transportista"]?.ToString(),
-                    RucTransportista = reader["RucTransportista"] == DBNull.Value ? null : reader["RucTransportista"]?.ToString(),
-                    PlacaVehiculo = reader["PlacaVehiculo"] == DBNull.Value ? null : reader["PlacaVehiculo"]?.ToString(),
-                    Observacion = reader["Observacion"] == DBNull.Value ? null : reader["Observacion"]?.ToString()
-                };
-            }
-
-            await reader.NextResultAsync();
-
-            while (await reader.ReadAsync())
-            {
-                compra.Detalles.Add(new DetalleCompraDetalleDto
-                {
-                    IdDetalleCompra = Convert.ToInt32(reader["IdDetalleCompra"]),
-                    IdProducto = Convert.ToInt32(reader["IdProducto"]),
-                    CodigoProducto = reader["CodigoProducto"]?.ToString() ?? string.Empty,
-                    Producto = reader["Producto"]?.ToString() ?? string.Empty,
-                    Cantidad = Convert.ToInt32(reader["Cantidad"]),
-                    PrecioCompra = Convert.ToDecimal(reader["PrecioCompra"]),
-                    Subtotal = Convert.ToDecimal(reader["Subtotal"])
+                    TieneGuia = Convert.ToBoolean(reader["TieneGuia"])
                 });
             }
 
-            await reader.NextResultAsync();
-
-            while (await reader.ReadAsync())
-            {
-                compra.Pagos.Add(new PagoCompraDetalleDto
-                {
-                    IdPagoCompra = Convert.ToInt32(reader["IdPagoCompra"]),
-                    MetodoPago = reader["MetodoPago"]?.ToString() ?? string.Empty,
-                    MontoPagado = Convert.ToDecimal(reader["MontoPagado"]),
-                    FechaPago = Convert.ToDateTime(reader["FechaPago"]),
-                    Observacion = reader["Observacion"] == DBNull.Value ? null : reader["Observacion"]?.ToString()
-                });
-            }
-
-            await reader.NextResultAsync();
-
-            while (await reader.ReadAsync())
-            {
-                compra.Cuotas.Add(new CuotaCompraDetalleDto
-                {
-                    IdCuotaCompra = Convert.ToInt32(reader["IdCuotaCompra"]),
-                    NumeroCuota = Convert.ToInt32(reader["NumeroCuota"]),
-                    FechaVencimiento = Convert.ToDateTime(reader["FechaVencimiento"]),
-                    MontoCuota = Convert.ToDecimal(reader["MontoCuota"]),
-                    MontoPagado = Convert.ToDecimal(reader["MontoPagado"]),
-                    EstadoCuota = reader["EstadoCuota"]?.ToString() ?? string.Empty
-                });
-            }
-
-            return compra;
+            return compras;
         }
+        private static object CrearCuotasJson(CompraCrearDto dto)
+        {
+            if (dto.TipoPago != "Cuotas")
+            {
+                return DBNull.Value;
+            }
+
+            if (dto.Cuotas == null || dto.Cuotas.Count == 0)
+            {
+                return DBNull.Value;
+            }
+
+            var cuotas = dto.Cuotas
+                .OrderBy(c => c.NumeroCuota)
+                .Select(c => new
+                {
+                    numeroCuota = c.NumeroCuota,
+                    fechaVencimiento = c.FechaVencimiento?.Date.ToString("yyyy-MM-dd")
+                })
+                .ToList();
+
+            return JsonSerializer.Serialize(cuotas);
+        }
+        private static object CrearCuotasPagadasJson(PagoCompraCrearDto dto)
+        {
+            if (dto.IdsCuotasPagadas == null || dto.IdsCuotasPagadas.Count == 0)
+            {
+                return DBNull.Value;
+            }
+
+            var idsCuotas = dto.IdsCuotasPagadas
+                .Where(id => id > 0)
+                .Distinct()
+                .ToList();
+
+            if (idsCuotas.Count == 0)
+            {
+                return DBNull.Value;
+            }
+
+            return JsonSerializer.Serialize(idsCuotas);
+        }
+        private static DataTable CrearTablaDetalles(IEnumerable<CompraDetalleCrearDto> detalles)
+        {
+            var table = new DataTable();
+
+            table.Columns.Add("IdProducto", typeof(int));
+            table.Columns.Add("Cantidad", typeof(int));
+            table.Columns.Add("PrecioCompra", typeof(decimal));
+
+            foreach (var detalle in detalles)
+            {
+                table.Rows.Add(
+                    detalle.IdProducto,
+                    detalle.Cantidad,
+                    detalle.PrecioCompra
+                );
+            }
+
+            return table;
+        }
+
         private static void ValidarCompra(CompraCrearDto dto)
         {
             if (dto.IdProveedor <= 0)
@@ -432,6 +547,11 @@ namespace Sistema3S.Web.Services.Implementations
             if (!dto.FechaEmisionComprobante.HasValue)
             {
                 throw new InvalidOperationException("Ingresa la fecha de emisión del comprobante.");
+            }
+
+            if (dto.GuiaRemision == null)
+            {
+                throw new InvalidOperationException("La información de guía no es válida.");
             }
 
             if (dto.GuiaRemision.TieneGuia)
@@ -479,7 +599,7 @@ namespace Sistema3S.Web.Services.Implementations
 
             if (dto.Detalles.Any(d => d.PrecioCompra <= 0))
             {
-                throw new InvalidOperationException("El precio de compra debe ser mayor a 0.");
+                throw new InvalidOperationException("El precio de compra con IGV debe ser mayor a 0.");
             }
 
             if (dto.Detalles.GroupBy(d => d.IdProducto).Any(g => g.Count() > 1))
@@ -509,9 +629,14 @@ namespace Sistema3S.Web.Services.Implementations
                 throw new InvalidOperationException("El monto pagado no puede ser negativo.");
             }
 
-            var subtotal = dto.Detalles.Sum(d => d.Cantidad * d.PrecioCompra);
-            var igv = Math.Round(subtotal * 0.18m, 2);
-            var total = subtotal + igv;
+            var total = Math.Round(dto.Detalles.Sum(d => d.Cantidad * d.PrecioCompra), 2);
+            var subtotal = Math.Round(total / 1.18m, 2);
+            var igv = Math.Round(total - subtotal, 2);
+
+            if (igv < 0)
+            {
+                throw new InvalidOperationException("El cálculo de IGV no es válido.");
+            }
 
             if (dto.MontoPagado > total)
             {
@@ -535,11 +660,80 @@ namespace Sistema3S.Web.Services.Implementations
                     throw new InvalidOperationException("Ingresa un número de cuotas válido.");
                 }
 
+                if (dto.NumeroCuotas.Value > 24)
+                {
+                    throw new InvalidOperationException("El número máximo permitido es 24 cuotas.");
+                }
+
                 if (!dto.FechaPrimerVencimiento.HasValue)
                 {
                     throw new InvalidOperationException("Ingresa la fecha del primer vencimiento.");
                 }
+
+                if (dto.MontoPagado >= total)
+                {
+                    throw new InvalidOperationException("Para compra en cuotas debe quedar saldo pendiente.");
+                }
+
+                if (dto.Cuotas != null && dto.Cuotas.Count > 0)
+                {
+                    if (dto.Cuotas.Count != dto.NumeroCuotas.Value)
+                    {
+                        throw new InvalidOperationException("La cantidad de cuotas no coincide con el número de cuotas indicado.");
+                    }
+
+                    var numerosCuota = dto.Cuotas
+                        .Select(c => c.NumeroCuota)
+                        .ToList();
+
+                    if (numerosCuota.Any(n => n <= 0 || n > dto.NumeroCuotas.Value))
+                    {
+                        throw new InvalidOperationException("Existe una cuota con número fuera del rango permitido.");
+                    }
+
+                    if (numerosCuota.Distinct().Count() != dto.NumeroCuotas.Value)
+                    {
+                        throw new InvalidOperationException("Las cuotas no pueden estar repetidas.");
+                    }
+
+                    if (dto.Cuotas.Any(c => !c.FechaVencimiento.HasValue))
+                    {
+                        throw new InvalidOperationException("Todas las cuotas deben tener fecha de vencimiento.");
+                    }
+                }
             }
+        }
+
+        private static CompraRegistroResultadoDto LeerResultadoCompra(
+            SqlDataReader reader,
+            string mensajeDefecto
+        )
+        {
+            return new CompraRegistroResultadoDto
+            {
+                IdCompra = Convert.ToInt32(reader["IdCompra"]),
+                Subtotal = reader["Subtotal"] == DBNull.Value ? 0 : Convert.ToDecimal(reader["Subtotal"]),
+                Igv = reader["Igv"] == DBNull.Value ? 0 : Convert.ToDecimal(reader["Igv"]),
+                Total = reader["Total"] == DBNull.Value ? 0 : Convert.ToDecimal(reader["Total"]),
+                TotalPagado = reader["TotalPagado"] == DBNull.Value ? 0 : Convert.ToDecimal(reader["TotalPagado"]),
+                SaldoPendiente = reader["SaldoPendiente"] == DBNull.Value ? 0 : Convert.ToDecimal(reader["SaldoPendiente"]),
+                Mensaje = reader.GetSchemaTable() != null && TieneColumna(reader, "Mensaje")
+                    ? reader["Mensaje"]?.ToString() ?? mensajeDefecto
+                    : mensajeDefecto
+            };
+        }
+
+        private static bool TieneColumna(SqlDataReader reader, string nombreColumna)
+        {
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                if (reader.GetName(i).Equals(nombreColumna, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static object ValorONull(string? valor)
